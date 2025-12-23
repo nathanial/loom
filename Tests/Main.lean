@@ -3,6 +3,7 @@
 -/
 import Crucible
 import Loom
+import Ledger
 
 open Crucible
 open Loom
@@ -273,6 +274,125 @@ test "isSafePath blocks absolute paths" := do
 
 test "isSafePath blocks home directory" := do
   Static.isSafePath "~/.ssh/id_rsa" ≡ false
+
+-- ============================================================================
+-- Database Tests
+-- ============================================================================
+
+testSuite "Database"
+
+test "defaultFactory creates connection" := do
+  let conn ← Database.defaultFactory
+  -- Verify we got a valid connection (empty db)
+  conn.db.basisT.id ≡ 0
+
+test "DbConfig.default uses defaultFactory" := do
+  let config := Database.DbConfig.default
+  let conn ← config.factory
+  conn.db.basisT.id ≡ 0
+
+test "DbConfig.withFactory uses custom factory" := do
+  -- Create a factory that pre-populates the database
+  let customFactory : Database.ConnectionFactory := do
+    let conn := Ledger.Connection.create
+    let tx : Ledger.Transaction := [Ledger.TxOp.add ⟨1⟩ ⟨"test/attr"⟩ (.string "value")]
+    match conn.transact tx with
+    | Except.ok (conn', _) => pure conn'
+    | Except.error _ => pure conn
+  let config := Database.DbConfig.withFactory customFactory
+  let conn ← config.factory
+  -- Should have the test entity
+  let datoms := conn.db.indexes.eavt.toList
+  datoms.isEmpty ≡ false
+
+-- Helper to create a minimal ServerRequest for testing
+private def testRequest : Citadel.ServerRequest :=
+  let httpReq : Herald.Core.Request := {
+    method := .GET
+    path := "/"
+    version := .http11
+    headers := Herald.Core.Headers.empty
+    body := ByteArray.empty
+  }
+  { request := httpReq, params := [] }
+
+test "Context.hasDatabase returns false without db" := do
+  -- Create a minimal context without database
+  let config : AppConfig := { secretKey := "test".toUTF8, dbConfig := none }
+  let ctx : Context := {
+    request := testRequest
+    session := Session.empty
+    flash := Flash.empty
+    params := []
+    config := config
+    csrfToken := "token"
+    db := none
+  }
+  ctx.hasDatabase ≡ false
+
+test "Context.hasDatabase returns true with db" := do
+  let conn := Ledger.Connection.create
+  let config : AppConfig := { secretKey := "test".toUTF8, dbConfig := none }
+  let ctx : Context := {
+    request := testRequest
+    session := Session.empty
+    flash := Flash.empty
+    params := []
+    config := config
+    csrfToken := "token"
+    db := some conn
+  }
+  ctx.hasDatabase ≡ true
+
+test "Context.database returns db snapshot" := do
+  let conn := Ledger.Connection.create
+  let config : AppConfig := { secretKey := "test".toUTF8, dbConfig := none }
+  let ctx : Context := {
+    request := testRequest
+    session := Session.empty
+    flash := Flash.empty
+    params := []
+    config := config
+    csrfToken := "token"
+    db := some conn
+  }
+  ctx.database.isSome ≡ true
+
+test "Context.transact without db returns error" := do
+  let config : AppConfig := { secretKey := "test".toUTF8, dbConfig := none }
+  let ctx : Context := {
+    request := testRequest
+    session := Session.empty
+    flash := Flash.empty
+    params := []
+    config := config
+    csrfToken := "token"
+    db := none
+  }
+  let tx : Ledger.Transaction := []
+  match ← ctx.transact tx with
+  | Except.error _ => pure ()
+  | Except.ok _ => throw (IO.userError "Expected error for no db")
+
+test "Context.transact with db updates context" := do
+  let conn := Ledger.Connection.create
+  let config : AppConfig := { secretKey := "test".toUTF8, dbConfig := none }
+  let ctx : Context := {
+    request := testRequest
+    session := Session.empty
+    flash := Flash.empty
+    params := []
+    config := config
+    csrfToken := "token"
+    db := some conn
+  }
+  -- Execute an empty transaction
+  let tx : Ledger.Transaction := []
+  match ← ctx.transact tx with
+  | Except.ok ctx' =>
+    ctx'.hasDatabase ≡ true
+  | Except.error e =>
+    throw (IO.userError s!"Unexpected error: {e}")
 
 #generate_tests
 

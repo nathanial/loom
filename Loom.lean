@@ -9,6 +9,7 @@ import Loom.Cookie
 import Loom.Session
 import Loom.Form
 import Loom.Flash
+import Loom.Database
 import Loom.Controller
 import Loom.Middleware
 import Loom.Static

@@ -2,7 +2,9 @@
   Loom.Middleware - Common middleware implementations
 -/
 import Citadel
+import Ledger
 import Loom.Controller
+import Loom.Database
 
 namespace Loom
 
@@ -92,6 +94,33 @@ def errorRecovery : Citadel.Middleware := fun handler req => do
 /-- Compose multiple middleware into one -/
 def compose (middlewares : List Citadel.Middleware) : Citadel.Middleware :=
   middlewares.foldr (init := id) fun mw acc => fun handler => mw (acc handler)
+
+-- ============================================================================
+-- Database middleware
+-- ============================================================================
+
+/-- Database error recovery middleware.
+    Catches any database-related exceptions and returns 500 with error info.
+    This catches all exceptions - use errorRecovery for more selective handling. -/
+def databaseErrorRecovery : Citadel.Middleware := fun handler req => do
+  try
+    handler req
+  catch e =>
+    IO.eprintln s!"Database error: {e}"
+    pure (Citadel.ResponseBuilder.withStatus (Herald.Core.StatusCode.mk 500)
+      |>.withText "Database error occurred"
+      |>.build)
+
+/-- Query logging middleware.
+    Logs timing information for requests (db query logging happens at action level). -/
+def queryLogging : Citadel.Middleware := fun handler req => do
+  let start ← IO.monoNanosNow
+  let resp ← handler req
+  let elapsed := (← IO.monoNanosNow) - start
+  let ms := elapsed.toFloat / 1000000.0
+  if ms > 100.0 then  -- Log slow requests (>100ms)
+    IO.eprintln s!"[SLOW] {req.method} {req.path} took {ms.toString.take 8}ms"
+  pure resp
 
 end Middleware
 

@@ -2,10 +2,12 @@
   Loom.App - Application container that ties everything together
 -/
 import Citadel
+import Ledger
 import Loom.Controller
 import Loom.Router
 import Loom.Middleware
 import Loom.Static
+import Loom.Database
 
 namespace Loom
 
@@ -53,6 +55,18 @@ def delete (app : App) (pattern : String) (name : String) (action : Action) : Ap
 def patch (app : App) (pattern : String) (name : String) (action : Action) : App :=
   app.route name .PATCH pattern action
 
+/-- Configure database with a custom connection factory.
+    This automatically adds database error recovery middleware. -/
+def withDatabase (app : App) (factory : Database.ConnectionFactory) : App :=
+  let dbConfig : Database.DbConfig := { factory := factory }
+  { app with
+    config := { app.config with dbConfig := some dbConfig }
+    middlewares := app.middlewares ++ [Middleware.databaseErrorRecovery] }
+
+/-- Configure database with the default in-memory connection factory. -/
+def withDefaultDatabase (app : App) : App :=
+  app.withDatabase Database.defaultFactory
+
 /-- Parse cookies from request -/
 private def parseCookies (req : Citadel.ServerRequest) : List (String × String) :=
   match req.header "Cookie" with
@@ -68,7 +82,7 @@ private def loadSession (req : Citadel.ServerRequest) (config : AppConfig) : Ses
   | none => Session.empty
 
 /-- Build context from request -/
-private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : Context :=
+private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : IO Context := do
   -- Load session
   let session := loadSession req config
 
@@ -87,13 +101,19 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : Co
   -- Generate CSRF token
   let csrfToken := Form.generateCsrfToken config.secretKey session
 
-  { request := req
-  , session := session
-  , flash := flash
-  , params := params
-  , config := config
-  , csrfToken := csrfToken
-  }
+  -- Create database connection if configured
+  let db ← match config.dbConfig with
+    | some dbConfig => some <$> dbConfig.factory
+    | none => pure none
+
+  pure { request := req
+       , session := session
+       , flash := flash
+       , params := params
+       , config := config
+       , csrfToken := csrfToken
+       , db := db
+       }
 
 /-- Add path parameters to context -/
 private def addPathParams (ctx : Context) (pathParams : List (String × String)) : Context :=
@@ -171,8 +191,8 @@ private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : St
 
 /-- Create the main handler -/
 def toHandler (app : App) : Citadel.Handler := fun req => do
-  -- Build initial context
-  let ctx := buildContext req app.config
+  -- Build initial context (includes database connection if configured)
+  let ctx ← buildContext req app.config
 
   -- Find matching route
   match findRoute app.routes req.method req.path with

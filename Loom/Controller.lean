@@ -3,10 +3,12 @@
 -/
 import Citadel
 import Scribe
+import Ledger
 import Loom.Cookie
 import Loom.Session
 import Loom.Flash
 import Loom.Form
+import Loom.Database
 
 namespace Loom
 
@@ -22,6 +24,8 @@ structure AppConfig where
   staticPath : Option String := some "public"
   /-- Enable CSRF protection -/
   csrfEnabled : Bool := true
+  /-- Database configuration (None to disable) -/
+  dbConfig : Option Database.DbConfig := none
 
 /-- Request context available to actions -/
 structure Context where
@@ -37,6 +41,8 @@ structure Context where
   config : AppConfig
   /-- CSRF token for this request -/
   csrfToken : String
+  /-- Database connection (if configured) -/
+  db : Option Ledger.Connection := none
 
 namespace Context
 
@@ -85,6 +91,49 @@ def withSession (ctx : Context) (f : Session → Session) : Context :=
 /-- Update flash in context -/
 def withFlash (ctx : Context) (f : Flash → Flash) : Context :=
   { ctx with flash := f ctx.flash }
+
+/-- Update database connection in context -/
+def withDb (ctx : Context) (conn : Ledger.Connection) : Context :=
+  { ctx with db := some conn }
+
+-- ============================================================================
+-- Database helpers
+-- ============================================================================
+
+/-- Get the current database snapshot (if available). -/
+def database (ctx : Context) : Option Ledger.Db :=
+  ctx.db.map (·.db)
+
+/-- Execute a query against the database.
+    Returns None if no database is configured. -/
+def query (ctx : Context) (q : Ledger.Query) : Option Ledger.Query.QueryResult :=
+  ctx.db.map fun conn => Ledger.Query.execute q conn.db
+
+/-- Execute a transaction against the database.
+    Returns an updated context with the new connection state, or an error. -/
+def transact (ctx : Context) (tx : Ledger.Transaction) : IO (Except Ledger.TxError Context) := do
+  match ctx.db with
+  | none => pure (Except.error (.custom "No database connection"))
+  | some conn =>
+    match conn.transact tx with
+    | Except.ok (newConn, _report) =>
+      pure (Except.ok { ctx with db := some newConn })
+    | Except.error e => pure (Except.error e)
+
+/-- Execute a transaction and get both the updated context and the report. -/
+def transactWithReport (ctx : Context) (tx : Ledger.Transaction)
+    : IO (Except Ledger.TxError (Context × Ledger.TxReport)) := do
+  match ctx.db with
+  | none => pure (Except.error (.custom "No database connection"))
+  | some conn =>
+    match conn.transact tx with
+    | Except.ok (newConn, report) =>
+      pure (Except.ok ({ ctx with db := some newConn }, report))
+    | Except.error e => pure (Except.error e)
+
+/-- Check if a database connection is available. -/
+def hasDatabase (ctx : Context) : Bool :=
+  ctx.db.isSome
 
 end Context
 

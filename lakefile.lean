@@ -7,6 +7,7 @@ package loom where
 require citadel from ".." / "citadel"
 require scribe from ".." / "scribe"
 require crucible from ".." / "crucible"
+require ledger from ".." / "ledger"
 
 @[default_target]
 lean_lib Loom where
