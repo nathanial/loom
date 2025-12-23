@@ -43,6 +43,8 @@ structure Context where
   csrfToken : String
   /-- Database connection (if configured) -/
   db : Option Ledger.Connection := none
+  /-- Persistent database connection (if configured with persistence) -/
+  persistentDb : Option Ledger.Persist.PersistentConnection := none
 
 namespace Context
 
@@ -96,44 +98,85 @@ def withFlash (ctx : Context) (f : Flash → Flash) : Context :=
 def withDb (ctx : Context) (conn : Ledger.Connection) : Context :=
   { ctx with db := some conn }
 
+/-- Update persistent database connection in context -/
+def withPersistentDb (ctx : Context) (conn : Ledger.Persist.PersistentConnection) : Context :=
+  { ctx with persistentDb := some conn }
+
 -- ============================================================================
 -- Database helpers
 -- ============================================================================
 
-/-- Get the current database snapshot (if available). -/
+/-- Get the current database snapshot (if available).
+    Prefers persistent connection if available. -/
 def database (ctx : Context) : Option Ledger.Db :=
-  ctx.db.map (·.db)
+  match ctx.persistentDb with
+  | some pc => some pc.db
+  | none => ctx.db.map (·.db)
 
 /-- Execute a query against the database.
-    Returns None if no database is configured. -/
+    Returns None if no database is configured.
+    Prefers persistent connection if available. -/
 def query (ctx : Context) (q : Ledger.Query) : Option Ledger.Query.QueryResult :=
-  ctx.db.map fun conn => Ledger.Query.execute q conn.db
+  match ctx.persistentDb with
+  | some pc => some (Ledger.Query.execute q pc.db)
+  | none => ctx.db.map fun conn => Ledger.Query.execute q conn.db
 
 /-- Execute a transaction against the database.
-    Returns an updated context with the new connection state, or an error. -/
+    Returns an updated context with the new connection state, or an error.
+    Uses persistent connection if available (auto-persists to JSONL). -/
 def transact (ctx : Context) (tx : Ledger.Transaction) : IO (Except Ledger.TxError Context) := do
-  match ctx.db with
-  | none => pure (Except.error (.custom "No database connection"))
-  | some conn =>
-    match conn.transact tx with
-    | Except.ok (newConn, _report) =>
-      pure (Except.ok { ctx with db := some newConn })
+  match ctx.persistentDb with
+  | some pc =>
+    match ← pc.transact tx with
+    | Except.ok (newPc, _report) =>
+      pure (Except.ok { ctx with persistentDb := some newPc })
     | Except.error e => pure (Except.error e)
+  | none =>
+    match ctx.db with
+    | none => pure (Except.error (.custom "No database connection"))
+    | some conn =>
+      match conn.transact tx with
+      | Except.ok (newConn, _report) =>
+        pure (Except.ok { ctx with db := some newConn })
+      | Except.error e => pure (Except.error e)
 
-/-- Execute a transaction and get both the updated context and the report. -/
+/-- Execute a transaction and get both the updated context and the report.
+    Uses persistent connection if available (auto-persists to JSONL). -/
 def transactWithReport (ctx : Context) (tx : Ledger.Transaction)
     : IO (Except Ledger.TxError (Context × Ledger.TxReport)) := do
-  match ctx.db with
-  | none => pure (Except.error (.custom "No database connection"))
-  | some conn =>
-    match conn.transact tx with
-    | Except.ok (newConn, report) =>
-      pure (Except.ok ({ ctx with db := some newConn }, report))
+  match ctx.persistentDb with
+  | some pc =>
+    match ← pc.transact tx with
+    | Except.ok (newPc, report) =>
+      pure (Except.ok ({ ctx with persistentDb := some newPc }, report))
     | Except.error e => pure (Except.error e)
+  | none =>
+    match ctx.db with
+    | none => pure (Except.error (.custom "No database connection"))
+    | some conn =>
+      match conn.transact tx with
+      | Except.ok (newConn, report) =>
+        pure (Except.ok ({ ctx with db := some newConn }, report))
+      | Except.error e => pure (Except.error e)
 
-/-- Check if a database connection is available. -/
+/-- Check if a database connection is available.
+    Returns true if either persistent or in-memory connection is set. -/
 def hasDatabase (ctx : Context) : Bool :=
-  ctx.db.isSome
+  ctx.persistentDb.isSome || ctx.db.isSome
+
+/-- Allocate a new entity ID from the database.
+    Returns the new ID and updated context, or None if no database. -/
+def allocEntityId (ctx : Context) : Option (Ledger.EntityId × Context) :=
+  match ctx.persistentDb with
+  | some pc =>
+    let (eid, pc') := pc.allocEntityId
+    some (eid, { ctx with persistentDb := some pc' })
+  | none =>
+    match ctx.db with
+    | some conn =>
+      let (eid, conn') := conn.allocEntityId
+      some (eid, { ctx with db := some conn' })
+    | none => none
 
 end Context
 

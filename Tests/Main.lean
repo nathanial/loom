@@ -193,7 +193,7 @@ test "empty has no routes" := do
   Routes.empty.routes.isEmpty ≡ true
 
 test "get adds GET route" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty.get "/" "home" dummyAction
   routes.routes.length ≡ 1
   match routes.routes.head? with
@@ -203,7 +203,7 @@ test "get adds GET route" := do
   | none => throw (IO.userError "Expected route")
 
 test "findByName" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty
     |>.get "/" "home" dummyAction
     |>.get "/about" "about" dummyAction
@@ -211,7 +211,7 @@ test "findByName" := do
   (routes.findByName "missing").isSome ≡ false
 
 test "pathFor with params" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty
     |>.get "/users/:id" "user_show" dummyAction
     |>.get "/posts/:id/comments/:cid" "comment" dummyAction
@@ -219,12 +219,12 @@ test "pathFor with params" := do
   routes.pathFor "comment" [("id", "10"), ("cid", "5")] ≡ some "/posts/10/comments/5"
 
 test "pathFor missing param returns none" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty.get "/users/:id" "user" dummyAction
   routes.pathFor "user" [] ≡ none
 
 test "names" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty
     |>.get "/" "home" dummyAction
     |>.get "/about" "about" dummyAction
@@ -238,14 +238,14 @@ test "names" := do
 testSuite "UrlHelpers"
 
 test "pathFor" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty.get "/users/:id" "user" dummyAction
   let helpers := UrlHelpers.create routes
   helpers.pathFor "user" [("id", "42")] ≡ "/users/42"
   helpers.pathFor "missing" [] ≡ "#"
 
 test "urlFor with baseUrl" := do
-  let dummyAction : Action := fun _ => pure Citadel.Response.notFound
+  let dummyAction : Action := fun ctx => pure (Citadel.Response.notFound, ctx)
   let routes := Routes.empty.get "/" "home" dummyAction
   let helpers := UrlHelpers.create routes "https://example.com"
   helpers.urlFor "home" [] ≡ "https://example.com/"

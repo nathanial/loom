@@ -67,6 +67,15 @@ def withDatabase (app : App) (factory : Database.ConnectionFactory) : App :=
 def withDefaultDatabase (app : App) : App :=
   app.withDatabase Database.defaultFactory
 
+/-- Configure database with persistent JSONL storage.
+    Transactions are automatically written to the journal file and
+    replayed on startup to restore state. -/
+def withPersistentDatabase (app : App) (journalPath : System.FilePath) : App :=
+  let dbConfig := Database.DbConfig.withPersistence journalPath
+  { app with
+    config := { app.config with dbConfig := some dbConfig }
+    middlewares := app.middlewares ++ [Middleware.databaseErrorRecovery] }
+
 /-- Parse cookies from request -/
 private def parseCookies (req : Citadel.ServerRequest) : List (String × String) :=
   match req.header "Cookie" with
@@ -101,9 +110,17 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : IO
   let csrfToken := Form.generateCsrfToken config.secretKey session
 
   -- Create database connection if configured
-  let db ← match config.dbConfig with
-    | some dbConfig => some <$> dbConfig.factory
-    | none => pure none
+  -- If journalPath is set, use PersistentConnection for auto-persist to JSONL
+  let (db, persistentDb) ← match config.dbConfig with
+    | some dbConfig =>
+      match dbConfig.journalPath with
+      | some path =>
+        let pc ← Ledger.Persist.PersistentConnection.create path
+        pure (none, some pc)
+      | none =>
+        let conn ← dbConfig.factory
+        pure (some conn, none)
+    | none => pure (none, none)
 
   pure { request := req
        , session := session
@@ -112,6 +129,7 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : IO
        , config := config
        , csrfToken := csrfToken
        , db := db
+       , persistentDb := persistentDb
        }
 
 /-- Add path parameters to context -/
