@@ -14,8 +14,8 @@ private def fnvHash (data : ByteArray) : UInt64 :=
 
 /-- Convert UInt64 to hex string -/
 private def toHexString (n : UInt64) : String :=
-  let digits := n.toNat.toDigits 16
-  String.mk digits
+  let digits := Nat.toDigits 16 n.toNat
+  String.ofList digits
 
 /-- Sign data with a secret key -/
 private def sign (data : String) (secret : ByteArray) : String :=
@@ -88,16 +88,25 @@ def encode (s : Session) (secret : ByteArray) : String :=
   let encoded := Cookie.urlEncode data
   s!"{encoded}.{sig}"
 
+/-- Find the last occurrence of a character in a string -/
+private def findLastIndex (s : String) (c : Char) : Option Nat :=
+  let chars := s.toList
+  let len := chars.length
+  chars.reverse.findIdx? (· == c) |>.map (len - · - 1)
+
 /-- Decode and verify a session from a cookie value -/
 def decode (cookie : String) (secret : ByteArray) : Option Session :=
-  match cookie.splitOn "." with
-  | [encodedData, signature] =>
+  -- Split on the LAST dot (signature is always at the end)
+  match findLastIndex cookie '.' with
+  | none => none
+  | some dotIdx =>
+    let encodedData := cookie.take dotIdx
+    let signature := cookie.drop (dotIdx + 1)
     let data := Cookie.urlDecode encodedData
     if verifySignature data signature secret then
       some { data := decodeData data, modified := false }
     else
       none
-  | _ => none
 
 /-- Get session ID (creates one if not present) -/
 def getId (s : Session) : IO (String × Session) := do

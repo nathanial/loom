@@ -137,46 +137,49 @@ def hasDatabase (ctx : Context) : Bool :=
 
 end Context
 
-/-- Action type: takes context, returns response -/
-abbrev Action := Context → IO Herald.Core.Response
+/-- Action result: response paired with modified context -/
+abbrev ActionResult := Herald.Core.Response × Context
+
+/-- Action type: takes context, returns response with modified context -/
+abbrev Action := Context → IO ActionResult
 
 namespace Action
 
-/-- Create a text response -/
-def text (content : String) : IO Herald.Core.Response :=
-  pure (Citadel.Response.ok content)
+/-- Create a text response preserving context -/
+def text (content : String) (ctx : Context) : IO ActionResult :=
+  pure (Citadel.Response.ok content, ctx)
 
-/-- Create an HTML response -/
-def html (content : String) : IO Herald.Core.Response :=
-  pure (Citadel.Response.html content)
+/-- Create an HTML response preserving context -/
+def html (content : String) (ctx : Context) : IO ActionResult :=
+  pure (Citadel.Response.html content, ctx)
 
-/-- Create a JSON response -/
-def json (content : String) : IO Herald.Core.Response :=
-  pure (Citadel.Response.json content)
+/-- Create a JSON response preserving context -/
+def json (content : String) (ctx : Context) : IO ActionResult :=
+  pure (Citadel.Response.json content, ctx)
 
-/-- Create a redirect response -/
-def redirect (location : String) (permanent : Bool := false) : IO Herald.Core.Response :=
-  pure (Citadel.Response.redirect location permanent)
+/-- Create a redirect response preserving context -/
+def redirect (location : String) (ctx : Context) (permanent : Bool := false) : IO ActionResult :=
+  pure (Citadel.Response.redirect location permanent, ctx)
 
-/-- Create a not found response -/
-def notFound (message : String := "Not Found") : IO Herald.Core.Response :=
-  pure (Citadel.Response.notFound message)
+/-- Create a not found response preserving context -/
+def notFound (ctx : Context) (message : String := "Not Found") : IO ActionResult :=
+  pure (Citadel.Response.notFound message, ctx)
 
-/-- Create a bad request response -/
-def badRequest (message : String := "Bad Request") : IO Herald.Core.Response :=
-  pure (Citadel.Response.badRequest message)
+/-- Create a bad request response preserving context -/
+def badRequest (ctx : Context) (message : String := "Bad Request") : IO ActionResult :=
+  pure (Citadel.Response.badRequest message, ctx)
 
-/-- Create a forbidden response -/
-def forbidden (message : String := "Forbidden") : IO Herald.Core.Response :=
+/-- Create a forbidden response preserving context -/
+def forbidden (ctx : Context) (message : String := "Forbidden") : IO ActionResult :=
   pure (Citadel.ResponseBuilder.withStatus (Herald.Core.StatusCode.mk 403)
     |>.withText message
-    |>.build)
+    |>.build, ctx)
 
-/-- Create an unauthorized response -/
-def unauthorized (message : String := "Unauthorized") : IO Herald.Core.Response :=
+/-- Create an unauthorized response preserving context -/
+def unauthorized (ctx : Context) (message : String := "Unauthorized") : IO ActionResult :=
   pure (Citadel.ResponseBuilder.withStatus (Herald.Core.StatusCode.mk 401)
     |>.withText message
-    |>.build)
+    |>.build, ctx)
 
 end Action
 

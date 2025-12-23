@@ -77,8 +77,7 @@ private def parseCookies (req : Citadel.ServerRequest) : List (String × String)
 private def loadSession (req : Citadel.ServerRequest) (config : AppConfig) : Session :=
   let cookies := parseCookies req
   match cookies.lookup config.sessionCookieName with
-  | some encoded =>
-    Session.decode encoded config.secretKey |>.getD Session.empty
+  | some encoded => Session.decode encoded config.secretKey |>.getD Session.empty
   | none => Session.empty
 
 /-- Build context from request -/
@@ -214,10 +213,10 @@ def toHandler (app : App) : Citadel.Handler := fun req => do
         |>.withText "CSRF token validation failed"
         |>.build)
     else
-      -- Execute action
-      let resp ← route.action ctx
-      -- Finalize response with session
-      pure (finalizeResponse ctx resp)
+      -- Execute action (returns response and modified context)
+      let (resp, ctx') ← route.action ctx
+      -- Finalize response with session from modified context
+      pure (finalizeResponse ctx' resp)
 
 /-- Create Citadel server from app -/
 def toServer (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
