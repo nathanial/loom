@@ -226,12 +226,12 @@ def unauthorized (ctx : Context) (message : String := "Unauthorized") : IO Actio
 
 end Action
 
-/-- CSRF hidden field for forms (stable-only, since it's an input) -/
-def csrfField (token : String) : Scribe.HtmlM .stable Unit :=
+/-- CSRF hidden field for forms (stable-only, level-polymorphic, since it's an input) -/
+def csrfField (token : String) : Scribe.HtmlM .stable l Unit :=
   Scribe.input [Scribe.type_ "hidden", Scribe.name_ "_csrf", Scribe.value_ token]
 
-/-- Generate a CSRF meta tag for AJAX requests (polymorphic) -/
-def csrfMetaTag (token : String) : Scribe.HtmlM r Unit := do
+/-- Generate a CSRF meta tag for AJAX requests (polymorphic in region and level) -/
+def csrfMetaTag (token : String) : Scribe.HtmlM r l Unit := do
   Scribe.meta_ [Scribe.name_ "csrf-token", Scribe.content_ token]
 
 end Loom
