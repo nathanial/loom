@@ -11,6 +11,7 @@ import Loom.Form
 import Loom.Flash
 import Loom.Database
 import Loom.Controller
+import Loom.ActionM
 import Loom.Middleware
 import Loom.Static
 import Loom.Router

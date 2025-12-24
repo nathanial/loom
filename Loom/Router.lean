@@ -3,6 +3,7 @@
 -/
 import Citadel
 import Loom.Controller
+import Loom.ActionM
 
 namespace Loom
 
@@ -22,28 +23,28 @@ namespace Routes
 /-- Empty routes -/
 def empty : Routes := { routes := [] }
 
-/-- Add a named route -/
-def add (r : Routes) (name : String) (method : Herald.Core.Method) (pattern : String) (action : Action) : Routes :=
-  { routes := r.routes ++ [{ name, method, pattern, action }] }
+/-- Add a named route (accepts Action or ActionM Response) -/
+def add [ToAction α] (r : Routes) (name : String) (method : Herald.Core.Method) (pattern : String) (action : α) : Routes :=
+  { routes := r.routes ++ [{ name, method, pattern, action := ToAction.toAction action }] }
 
 /-- Add a GET route -/
-def get (r : Routes) (pattern : String) (name : String) (action : Action) : Routes :=
+def get [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
   r.add name .GET pattern action
 
 /-- Add a POST route -/
-def post (r : Routes) (pattern : String) (name : String) (action : Action) : Routes :=
+def post [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
   r.add name .POST pattern action
 
 /-- Add a PUT route -/
-def put (r : Routes) (pattern : String) (name : String) (action : Action) : Routes :=
+def put [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
   r.add name .PUT pattern action
 
 /-- Add a DELETE route -/
-def delete (r : Routes) (pattern : String) (name : String) (action : Action) : Routes :=
+def delete [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
   r.add name .DELETE pattern action
 
 /-- Add a PATCH route -/
-def patch (r : Routes) (pattern : String) (name : String) (action : Action) : Routes :=
+def patch [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
   r.add name .PATCH pattern action
 
 /-- Find a route by name -/

@@ -4,6 +4,7 @@
 import Citadel
 import Ledger
 import Loom.Controller
+import Loom.ActionM
 import Loom.Router
 import Loom.Middleware
 import Loom.Static
@@ -31,28 +32,28 @@ def withSecret (secret : String) : App :=
 def use (app : App) (mw : Citadel.Middleware) : App :=
   { app with middlewares := app.middlewares ++ [mw] }
 
-/-- Add a named route -/
-def route (app : App) (name : String) (method : Herald.Core.Method) (pattern : String) (action : Action) : App :=
+/-- Add a named route (accepts Action or ActionM Response) -/
+def route [ToAction α] (app : App) (name : String) (method : Herald.Core.Method) (pattern : String) (action : α) : App :=
   { app with routes := app.routes.add name method pattern action }
 
 /-- Add a GET route -/
-def get (app : App) (pattern : String) (name : String) (action : Action) : App :=
+def get [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .GET pattern action
 
 /-- Add a POST route -/
-def post (app : App) (pattern : String) (name : String) (action : Action) : App :=
+def post [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .POST pattern action
 
 /-- Add a PUT route -/
-def put (app : App) (pattern : String) (name : String) (action : Action) : App :=
+def put [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .PUT pattern action
 
 /-- Add a DELETE route -/
-def delete (app : App) (pattern : String) (name : String) (action : Action) : App :=
+def delete [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .DELETE pattern action
 
 /-- Add a PATCH route -/
-def patch (app : App) (pattern : String) (name : String) (action : Action) : App :=
+def patch [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .PATCH pattern action
 
 /-- Configure database with a custom connection factory.
