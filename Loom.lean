@@ -17,4 +17,5 @@ import Loom.IncludeStr
 import Loom.Middleware
 import Loom.Static
 import Loom.Router
+import Loom.SSE
 import Loom.App

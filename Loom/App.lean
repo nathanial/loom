@@ -9,6 +9,7 @@ import Loom.Router
 import Loom.Middleware
 import Loom.Static
 import Loom.Database
+import Loom.SSE
 
 namespace Loom
 
@@ -17,6 +18,10 @@ structure App where
   config : AppConfig
   routes : Routes := Routes.empty
   middlewares : List Citadel.Middleware := []
+  /-- Whether SSE is enabled for this application -/
+  sseEnabled : Bool := false
+  /-- SSE routes: (pattern, topic) -/
+  sseRoutes : List (String × String) := []
 
 namespace App
 
@@ -76,6 +81,21 @@ def withPersistentDatabase (app : App) (journalPath : System.FilePath) : App :=
   { app with
     config := { app.config with dbConfig := some dbConfig }
     middlewares := app.middlewares ++ [Middleware.databaseErrorRecovery] }
+
+/-! ## Server-Sent Events (SSE) Configuration -/
+
+/-- Enable SSE support for the application.
+    This allows the app to broadcast real-time events to connected clients. -/
+def withSSE (app : App) : App :=
+  { app with sseEnabled := true }
+
+/-- Register an SSE endpoint at the given path pattern.
+    Clients can connect to this endpoint to receive server-sent events.
+    The topic parameter determines which events the client will receive. -/
+def sseEndpoint (app : App) (pattern : String) (topic : String := "default") : App :=
+  { app with
+    sseEnabled := true
+    sseRoutes := app.sseRoutes ++ [(pattern, topic)] }
 
 /-- Parse cookies from request -/
 private def parseCookies (req : Citadel.ServerRequest) : List (String × String) :=
@@ -237,8 +257,8 @@ def toHandler (app : App) : Citadel.Handler := fun req => do
       -- Finalize response with session from modified context
       pure (finalizeResponse ctx' resp)
 
-/-- Create Citadel server from app -/
-def toServer (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
+/-- Create Citadel server from app (without SSE - use for non-SSE apps) -/
+def toServerBase (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
   let handler := app.toHandler
 
   -- Compose middleware
@@ -259,11 +279,53 @@ def toServer (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : 
     |>.route .PATCH "/*" finalHandler
     |>.route .OPTIONS "/*" finalHandler
 
+/-- Create Citadel server from app with SSE support -/
+def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
+  let handler := app.toHandler
+
+  -- Compose middleware
+  let composedMiddleware := Middleware.compose app.middlewares
+  let finalHandler := composedMiddleware handler
+
+  -- Create server with config
+  let config : Citadel.ServerConfig := {
+    host := host
+    port := port
+  }
+
+  -- Add routes and SSE configuration
+  let server := Citadel.Server.create config
+    |>.withSSE manager
+    |>.route .GET "/*" finalHandler
+    |>.route .POST "/*" finalHandler
+    |>.route .PUT "/*" finalHandler
+    |>.route .DELETE "/*" finalHandler
+    |>.route .PATCH "/*" finalHandler
+    |>.route .OPTIONS "/*" finalHandler
+
+  -- Register SSE routes
+  app.sseRoutes.foldl (fun s (pattern, topic) => s.sseRoute pattern topic) server
+
 /-- Run the application -/
 def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Unit := do
-  let server := app.toServer host port
-  IO.println s!"Loom starting on http://{host}:{port}"
-  server.run
+  if app.sseEnabled then
+    -- Create SSE connection manager
+    let manager ← Citadel.SSE.ConnectionManager.create
+
+    -- Initialize the global SSE publisher
+    SSE.setup manager
+
+    -- Create server with SSE support
+    let server := app.toServerWithSSE manager host port
+
+    IO.println s!"Loom starting on http://{host}:{port}"
+    if app.sseRoutes.length > 0 then
+      IO.println s!"SSE endpoints: {app.sseRoutes.map Prod.fst}"
+    server.run
+  else
+    let server := app.toServerBase host port
+    IO.println s!"Loom starting on http://{host}:{port}"
+    server.run
 
 /-- URL helpers for the app -/
 def urlHelpers (app : App) (baseUrl : String := "") : UrlHelpers :=
