@@ -20,3 +20,4 @@ import Loom.Static
 import Loom.Router
 import Loom.SSE
 import Loom.App
+import Loom.Chronicle
