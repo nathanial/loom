@@ -111,7 +111,8 @@ private def loadSession (req : Citadel.ServerRequest) (config : AppConfig) : Ses
   | none => Session.empty
 
 /-- Build context from request -/
-private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : IO Context := do
+private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
+    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : IO Context := do
   -- Load session
   let session := loadSession req config
 
@@ -130,18 +131,23 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig) : IO
   -- Generate CSRF token
   let csrfToken := Form.generateCsrfToken config.secretKey session
 
-  -- Create database connection if configured
-  -- If journalPath is set, use PersistentConnection for auto-persist to JSONL
-  let (db, persistentDb) ← match config.dbConfig with
-    | some dbConfig =>
-      match dbConfig.journalPath with
-      | some path =>
-        let pc ← Ledger.Persist.PersistentConnection.create path
-        pure (none, some pc)
-      | none =>
-        let conn ← dbConfig.factory
-        pure (some conn, none)
-    | none => pure (none, none)
+  -- Use cached persistent connection ref if available, otherwise create new connection
+  let (db, persistentDb) ← match cachedPersistentDbRef with
+    | some ref =>
+      let pc ← ref.get  -- Read current state from shared ref
+      pure (none, some pc)
+    | none =>
+      -- Fall back to per-request connection (only for non-persistent or tests)
+      match config.dbConfig with
+      | some dbConfig =>
+        match dbConfig.journalPath with
+        | some path =>
+          let pc ← Ledger.Persist.PersistentConnection.create path
+          pure (none, some pc)
+        | none =>
+          let conn ← dbConfig.factory
+          pure (some conn, none)
+      | none => pure (none, none)
 
   pure { request := req
        , session := session
@@ -228,9 +234,9 @@ private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : St
     else matchRoute route.pattern cleanPath |>.map (route, ·)
 
 /-- Create the main handler -/
-def toHandler (app : App) : Citadel.Handler := fun req => do
-  -- Build initial context (includes database connection if configured)
-  let ctx ← buildContext req app.config
+def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : Citadel.Handler := fun req => do
+  -- Build initial context (reads current connection from ref if available)
+  let ctx ← buildContext req app.config cachedPersistentDbRef
 
   -- Find matching route
   match findRoute app.routes req.method req.path with
@@ -254,12 +260,17 @@ def toHandler (app : App) : Citadel.Handler := fun req => do
     else
       -- Execute action (returns response and modified context)
       let (resp, ctx') ← route.action ctx
+      -- Write updated connection back to shared ref (if using cached db)
+      match cachedPersistentDbRef, ctx'.persistentDb with
+      | some ref, some updatedPc => ref.set updatedPc
+      | _, _ => pure ()
       -- Finalize response with session from modified context
       pure (finalizeResponse ctx' resp)
 
 /-- Create Citadel server from app (without SSE - use for non-SSE apps) -/
-def toServerBase (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
-  let handler := app.toHandler
+def toServerBase (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
+  let handler := app.toHandler cachedPersistentDbRef
 
   -- Compose middleware
   let composedMiddleware := Middleware.compose app.middlewares
@@ -280,8 +291,10 @@ def toServerBase (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000
     |>.route .OPTIONS "/*" finalHandler
 
 /-- Create Citadel server from app with SSE support -/
-def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager) (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
-  let handler := app.toHandler
+def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager)
+    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
+  let handler := app.toHandler cachedPersistentDbRef
 
   -- Compose middleware
   let composedMiddleware := Middleware.compose app.middlewares
@@ -308,6 +321,19 @@ def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager) (host 
 
 /-- Run the application -/
 def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Unit := do
+  -- Initialize persistent database connection once at startup (not per-request!)
+  -- Use IO.Ref to share mutable state across requests
+  let cachedDbRef ← match app.config.dbConfig with
+    | some dbConfig =>
+      match dbConfig.journalPath with
+      | some path =>
+        let pc ← Ledger.Persist.PersistentConnection.create path
+        IO.println s!"Database: {pc.db.size} datoms loaded from {path}"
+        let ref ← IO.mkRef pc
+        pure (some ref)
+      | none => pure none
+    | none => pure none
+
   if app.sseEnabled then
     -- Create SSE connection manager
     let manager ← Citadel.SSE.ConnectionManager.create
@@ -315,15 +341,15 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
     -- Initialize the global SSE publisher
     SSE.setup manager
 
-    -- Create server with SSE support
-    let server := app.toServerWithSSE manager host port
+    -- Create server with SSE support (using cached db ref)
+    let server := app.toServerWithSSE manager cachedDbRef host port
 
     IO.println s!"Loom starting on http://{host}:{port}"
     if app.sseRoutes.length > 0 then
       IO.println s!"SSE endpoints: {app.sseRoutes.map Prod.fst}"
     server.run
   else
-    let server := app.toServerBase host port
+    let server := app.toServerBase cachedDbRef host port
     IO.println s!"Loom starting on http://{host}:{port}"
     server.run
 
