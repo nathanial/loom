@@ -3,6 +3,7 @@
 -/
 import Citadel
 import Ledger
+import Chronicle
 import Loom.Controller
 import Loom.ActionM
 import Loom.Router
@@ -22,6 +23,8 @@ structure App where
   sseEnabled : Bool := false
   /-- SSE routes: (pattern, topic) -/
   sseRoutes : List (String × String) := []
+  /-- Application logger for action-level logging -/
+  logger : Option Chronicle.MultiLogger := none
 
 namespace App
 
@@ -84,6 +87,10 @@ def withPersistentDatabase (app : App) (journalPath : System.FilePath) : App :=
 
 /-! ## Server-Sent Events (SSE) Configuration -/
 
+/-- Set the application logger for action-level logging -/
+def withLogger (app : App) (logger : Chronicle.MultiLogger) : App :=
+  { app with logger := some logger }
+
 /-- Enable SSE support for the application.
     This allows the app to broadcast real-time events to connected clients. -/
 def withSSE (app : App) : App :=
@@ -112,7 +119,8 @@ private def loadSession (req : Citadel.ServerRequest) (config : AppConfig) : Ses
 
 /-- Build context from request -/
 private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
-    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : IO Context := do
+    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (logger : Option Chronicle.MultiLogger := none) : IO Context := do
   -- Load session
   let session := loadSession req config
 
@@ -157,6 +165,7 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
        , csrfToken := csrfToken
        , db := db
        , persistentDb := persistentDb
+       , logger := logger
        }
 
 /-- Add path parameters to context -/
@@ -236,7 +245,7 @@ private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : St
 /-- Create the main handler -/
 def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : Citadel.Handler := fun req => do
   -- Build initial context (reads current connection from ref if available)
-  let ctx ← buildContext req app.config cachedPersistentDbRef
+  let ctx ← buildContext req app.config cachedPersistentDbRef app.logger
 
   -- Find matching route
   match findRoute app.routes req.method req.path with

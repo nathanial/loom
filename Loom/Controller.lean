@@ -4,6 +4,7 @@
 import Citadel
 import Scribe
 import Ledger
+import Chronicle
 import Loom.Cookie
 import Loom.Session
 import Loom.Flash
@@ -45,6 +46,8 @@ structure Context where
   db : Option Ledger.Connection := none
   /-- Persistent database connection (if configured with persistence) -/
   persistentDb : Option Ledger.Persist.PersistentConnection := none
+  /-- Logger for application-level logging -/
+  logger : Option Chronicle.MultiLogger := none
 
 namespace Context
 
@@ -101,6 +104,10 @@ def withDb (ctx : Context) (conn : Ledger.Connection) : Context :=
 /-- Update persistent database connection in context -/
 def withPersistentDb (ctx : Context) (conn : Ledger.Persist.PersistentConnection) : Context :=
   { ctx with persistentDb := some conn }
+
+/-- Update logger in context -/
+def withLogger (ctx : Context) (logger : Chronicle.MultiLogger) : Context :=
+  { ctx with logger := some logger }
 
 -- ============================================================================
 -- Database helpers
