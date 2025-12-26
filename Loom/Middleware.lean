@@ -4,6 +4,7 @@
 import Citadel
 import Ledger
 import Loom.Controller
+import Loom.Form
 import Loom.Database
 
 namespace Loom
@@ -28,6 +29,49 @@ def securityHeaders : Citadel.Middleware := fun handler req => do
     |>.add "X-Frame-Options" "DENY"
     |>.add "X-XSS-Protection" "1; mode=block"
   pure { resp with headers }
+
+/-- Parse method string to Method enum -/
+private def parseMethod (s : String) : Option Herald.Core.Method :=
+  match s.toUpper with
+  | "GET" => some .GET
+  | "POST" => some .POST
+  | "PUT" => some .PUT
+  | "DELETE" => some .DELETE
+  | "PATCH" => some .PATCH
+  | "HEAD" => some .HEAD
+  | "OPTIONS" => some .OPTIONS
+  | _ => none
+
+/-- Method override middleware.
+    Allows HTML forms to simulate PUT, DELETE, and PATCH requests by including
+    a hidden `_method` field. Only applies to POST requests.
+
+    Example HTML form:
+    ```html
+    <form method="POST" action="/resource/123">
+      <input type="hidden" name="_method" value="PUT">
+      ...
+    </form>
+    ```
+-/
+def methodOverride : Citadel.Middleware := fun handler req => do
+  -- Only override POST requests
+  if req.method != .POST then
+    return ← handler req
+
+  -- Parse body for _method parameter
+  let bodyStr := String.fromUTF8! req.request.body
+  let params := Form.parseUrlEncoded bodyStr
+  match params.lookup "_method" with
+  | none => handler req
+  | some methodStr =>
+    match parseMethod methodStr with
+    | none => handler req  -- Invalid method, pass through
+    | some newMethod =>
+      -- Create new request with overridden method
+      let newRequest := { req.request with method := newMethod }
+      let newServerRequest := { req with request := newRequest }
+      handler newServerRequest
 
 /-- Add CORS headers for API access -/
 def cors (allowOrigin : String := "*") : Citadel.Middleware := fun handler req => do
