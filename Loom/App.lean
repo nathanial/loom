@@ -64,6 +64,40 @@ def delete [ToAction α] (app : App) (pattern : String) (name : String) (action 
 def patch [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
   app.route name .PATCH pattern action
 
+/-! ## Type-safe route registration -/
+
+/-- Typeclass for route types that provide pattern and name extraction -/
+class HasRouteInfo (R : Type) where
+  /-- Get the URL pattern with :param placeholders (e.g., "/kanban/column/:id") -/
+  pattern : R → String
+  /-- Get the route name in snake_case (e.g., "kanban_get_column") -/
+  routeName : R → String
+
+/-- Add a route using type-safe route info.
+    Extracts pattern and name from the route type automatically. -/
+def route' [ToAction α] [HasRouteInfo R] (app : App) (method : Herald.Core.Method) (r : R) (action : α) : App :=
+  app.route (HasRouteInfo.routeName r) method (HasRouteInfo.pattern r) action
+
+/-- Add a GET route using type-safe route info -/
+def get' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
+  app.route' .GET r action
+
+/-- Add a POST route using type-safe route info -/
+def post' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
+  app.route' .POST r action
+
+/-- Add a PUT route using type-safe route info -/
+def put' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
+  app.route' .PUT r action
+
+/-- Add a DELETE route using type-safe route info -/
+def delete' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
+  app.route' .DELETE r action
+
+/-- Add a PATCH route using type-safe route info -/
+def patch' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
+  app.route' .PATCH r action
+
 /-- Configure database with a custom connection factory.
     This automatically adds database error recovery middleware. -/
 def withDatabase (app : App) (factory : Database.ConnectionFactory) : App :=
