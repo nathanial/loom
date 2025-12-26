@@ -2,6 +2,7 @@
   Loom.Static - Static file serving
 -/
 import Citadel
+import Staple
 
 namespace Loom
 
@@ -45,15 +46,11 @@ def mimeType (path : String) : String :=
   -- Default
   | _ => "application/octet-stream"
 
-/-- Check if a string contains a substring -/
-private def containsSubstr (haystack needle : String) : Bool :=
-  (haystack.splitOn needle).length > 1
-
 /-- Check if a path is safe (no directory traversal) -/
 def isSafePath (path : String) : Bool :=
-  !containsSubstr path ".." &&
+  !Staple.String.containsSubstr path ".." &&
   !path.startsWith "/" &&
-  !containsSubstr path "~"
+  !Staple.String.containsSubstr path "~"
 
 /-- Configuration for static file serving -/
 structure Config where
