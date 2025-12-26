@@ -59,6 +59,11 @@ def methodOverride : Citadel.Middleware := fun handler req => do
   if req.method != .POST then
     return ← handler req
 
+  -- Only process form-urlencoded content (skip multipart, json, binary, etc.)
+  let contentType := req.request.headers.get "Content-Type" |>.getD ""
+  if !contentType.startsWith "application/x-www-form-urlencoded" then
+    return ← handler req
+
   -- Parse body for _method parameter
   let bodyStr := String.fromUTF8! req.request.body
   let params := Form.parseUrlEncoded bodyStr

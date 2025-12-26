@@ -84,26 +84,34 @@ def extractBoundary (contentType : String) : Option String :=
     else
       none
 
-/-- Find ByteArray needle in haystack starting at position -/
-private def findByteArray (haystack : ByteArray) (needle : ByteArray) (start : Nat := 0) : Option Nat := do
-  if needle.size == 0 then return start
-  if start + needle.size > haystack.size then none
+/-- Safe byte access -/
+private def getByte (arr : ByteArray) (i : Nat) : UInt8 :=
+  if i < arr.size then arr.get! i else 0
+
+/-- Check if bytes match at position -/
+private def bytesMatch (haystack needle : ByteArray) (pos : Nat) : Bool :=
+  if pos + needle.size > haystack.size then false
   else
-    for i in [start : haystack.size - needle.size + 1] do
-      let mut found := true
-      for j in [0 : needle.size] do
-        if haystack.get! (i + j) != needle.get! j then
-          found := false
-          break
-      if found then
-        return i
-    none
+    let indices := List.range needle.size
+    indices.all fun j => getByte haystack (pos + j) == getByte needle j
+
+/-- Find ByteArray needle in haystack starting at position -/
+private def findByteArray (haystack : ByteArray) (needle : ByteArray) (start : Nat := 0) : Option Nat :=
+  if needle.size == 0 then some start
+  else if start + needle.size > haystack.size then none
+  else
+    -- Generate list of positions to check
+    let positions := List.range (haystack.size - needle.size + 1 - start) |>.map (· + start)
+    positions.findSome? fun pos =>
+      if bytesMatch haystack needle pos then some pos else none
 
 /-- Extract slice of ByteArray -/
 private def sliceByteArray (arr : ByteArray) (start : Nat) (length : Nat) : ByteArray :=
-  let endPos := min (start + length) arr.size
-  let bytes := (List.range (endPos - start)).map fun i => arr.get! (start + i)
-  ⟨bytes.toArray⟩
+  if start >= arr.size then ByteArray.empty
+  else
+    let endPos := min (start + length) arr.size
+    let bytes := (List.range (endPos - start)).map fun i => getByte arr (start + i)
+    ⟨bytes.toArray⟩
 
 /-- Parse a header line like "Content-Disposition: form-data; name=\"field\"; filename=\"test.txt\"" -/
 private def parseHeaderLine (line : String) : Option (String × String) :=
@@ -160,6 +168,10 @@ private def parsePart (partData : ByteArray) : Option MultipartPart := do
       content := content
     }
 
+/-- Safe byte check (alias for getByte) -/
+private def byteAt (arr : ByteArray) (i : Nat) : UInt8 :=
+  getByte arr i
+
 /-- Parse complete multipart body -/
 def parse (contentType : String) (body : ByteArray) : Option MultipartData := do
   let boundary ← extractBoundary contentType
@@ -179,7 +191,7 @@ def parse (contentType : String) (body : ByteArray) : Option MultipartData := do
 
     -- Skip CRLF after boundary
     if pos + 2 <= body.size then
-      if body.get! pos == 13 && body.get! (pos + 1) == 10 then
+      if byteAt body pos == 13 && byteAt body (pos + 1) == 10 then
         pos := pos + 2
 
     -- Parse each part
@@ -203,14 +215,14 @@ def parse (contentType : String) (body : ByteArray) : Option MultipartData := do
         -- Move past boundary
         pos := nextBoundary + boundaryMarker.size
 
-        -- Check if this is the end marker
+        -- Check if this is the end marker (ends with "--")
         if pos + 2 <= body.size then
-          if body.get! pos == 45 && body.get! (pos + 1) == 45 then  -- "--"
+          if byteAt body pos == 45 && byteAt body (pos + 1) == 45 then  -- "--"
             break  -- End of multipart
 
         -- Skip CRLF after boundary
         if pos + 2 <= body.size then
-          if body.get! pos == 13 && body.get! (pos + 1) == 10 then
+          if byteAt body pos == 13 && byteAt body (pos + 1) == 10 then
             pos := pos + 2
 
   return { parts := parts }
