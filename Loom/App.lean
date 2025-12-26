@@ -253,7 +253,7 @@ def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist
     -- Try static file if configured
     match app.config.staticPath with
     | some staticPath =>
-      match ← Static.serveFile staticPath req.path with
+      match ← Static.serveFile staticPath req.path app.config.devMode with
       | some resp => pure resp
       | none => pure Citadel.Response.notFound
     | none => pure Citadel.Response.notFound

@@ -55,14 +55,34 @@ def isSafePath (path : String) : Bool :=
   !path.startsWith "/" &&
   !containsSubstr path "~"
 
+/-- Configuration for static file serving -/
+structure Config where
+  /-- Base directory for static files -/
+  basePath : String
+  /-- Development mode disables caching -/
+  devMode : Bool := false
+  /-- Cache max-age in seconds (only used when devMode is false) -/
+  maxAge : Nat := 3600
+  deriving Inhabited
+
 /-- Serve a single file from disk (non-recursive helper) -/
-private def serveFileAt (fullPath : String) : IO (Option Herald.Core.Response) := do
+private def serveFileAt (fullPath : String) (devMode : Bool := false) (maxAge : Nat := 3600) : IO (Option Herald.Core.Response) := do
   try
     let contents ← IO.FS.readBinFile fullPath
     let contentType := mimeType fullPath
+    -- Get file modification time for ETag
+    let metadata ← System.FilePath.metadata fullPath
+    let mtime := metadata.modified.sec
+    let etag := s!"\"{mtime}\""
+    -- Set cache headers based on mode
+    let cacheControl := if devMode then
+      "no-cache, no-store, must-revalidate"
+    else
+      s!"public, max-age={maxAge}"
     let resp := Citadel.ResponseBuilder.withStatus Herald.Core.StatusCode.ok
       |>.withHeader "Content-Type" contentType
-      |>.withHeader "Cache-Control" "public, max-age=3600"
+      |>.withHeader "Cache-Control" cacheControl
+      |>.withHeader "ETag" etag
       |>.withBody contents
       |>.build
     return some resp
@@ -70,7 +90,7 @@ private def serveFileAt (fullPath : String) : IO (Option Herald.Core.Response) :
     return none
 
 /-- Serve a file from disk -/
-def serveFile (basePath : String) (requestPath : String) : IO (Option Herald.Core.Response) := do
+def serveFile (basePath : String) (requestPath : String) (devMode : Bool := false) (maxAge : Nat := 3600) : IO (Option Herald.Core.Response) := do
   -- Remove leading slash and sanitize
   let relativePath := if requestPath.startsWith "/" then requestPath.drop 1 else requestPath
 
@@ -90,23 +110,43 @@ def serveFile (basePath : String) (requestPath : String) : IO (Option Herald.Cor
     let indexPath := s!"{fullPath}/index.html"
     if !(← System.FilePath.pathExists indexPath) then
       return none
-    serveFileAt indexPath
+    serveFileAt indexPath devMode maxAge
   else
-    serveFileAt fullPath
+    serveFileAt fullPath devMode maxAge
+
+/-- Serve a file using config -/
+def serveFileWithConfig (config : Config) (requestPath : String) : IO (Option Herald.Core.Response) :=
+  serveFile config.basePath requestPath config.devMode config.maxAge
 
 /-- Create a static file handler -/
-def handler (basePath : String) : Citadel.Handler := fun req => do
-  match ← serveFile basePath req.path with
+def handler (basePath : String) (devMode : Bool := false) : Citadel.Handler := fun req => do
+  match ← serveFile basePath req.path devMode with
+  | some resp => pure resp
+  | none => pure Citadel.Response.notFound
+
+/-- Create a static file handler with config -/
+def handlerWithConfig (config : Config) : Citadel.Handler := fun req => do
+  match ← serveFileWithConfig config req.path with
   | some resp => pure resp
   | none => pure Citadel.Response.notFound
 
 /-- Create static file middleware (tries static first, then passes to handler) -/
-def middleware (basePath : String) : Citadel.Middleware := fun handler req => do
+def middleware (basePath : String) (devMode : Bool := false) : Citadel.Middleware := fun handler req => do
   -- Only handle GET requests for static files
   if req.method != .GET then
     return ← handler req
 
-  match ← serveFile basePath req.path with
+  match ← serveFile basePath req.path devMode with
+  | some resp => pure resp
+  | none => handler req
+
+/-- Create static file middleware with config -/
+def middlewareWithConfig (config : Config) : Citadel.Middleware := fun handler req => do
+  -- Only handle GET requests for static files
+  if req.method != .GET then
+    return ← handler req
+
+  match ← serveFileWithConfig config req.path with
   | some resp => pure resp
   | none => handler req
 

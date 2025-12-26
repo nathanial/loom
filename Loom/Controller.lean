@@ -27,6 +27,8 @@ structure AppConfig where
   csrfEnabled : Bool := true
   /-- Database configuration (None to disable) -/
   dbConfig : Option Database.DbConfig := none
+  /-- Development mode - disables static file caching -/
+  devMode : Bool := true
 
 /-- Request context available to actions -/
 structure Context where
