@@ -129,11 +129,19 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
 
   -- Parse parameters (path params would come from router, for now just query + body)
   let queryParams := Form.parseQueryString req.path
-  let bodyParams :=
-    if req.method != .GET && req.method != .HEAD then
-      Form.parseUrlEncoded req.bodyString
+
+  -- Parse body based on content type
+  let contentType := req.header "Content-Type"
+  let (bodyParams, multipartData) :=
+    if req.method == .GET || req.method == .HEAD then
+      ([], none)
+    else if Multipart.isMultipart (contentType.getD "") then
+      match Multipart.parse (contentType.getD "") req.body with
+      | some mpd => (mpd.toParams, some mpd)
+      | none => ([], none)
     else
-      []
+      (Form.parseUrlEncoded req.bodyString, none)
+
   let params := queryParams ++ bodyParams
 
   -- Generate CSRF token
@@ -166,6 +174,7 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
        , db := db
        , persistentDb := persistentDb
        , logger := logger
+       , multipartData := multipartData
        }
 
 /-- Add path parameters to context -/

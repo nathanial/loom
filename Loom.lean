@@ -8,6 +8,7 @@
 import Loom.Cookie
 import Loom.Session
 import Loom.Form
+import Loom.Multipart
 import Loom.Flash
 import Loom.Database
 import Loom.Controller

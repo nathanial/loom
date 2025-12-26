@@ -9,6 +9,7 @@ import Loom.Cookie
 import Loom.Session
 import Loom.Flash
 import Loom.Form
+import Loom.Multipart
 import Loom.Database
 
 namespace Loom
@@ -50,6 +51,8 @@ structure Context where
   persistentDb : Option Ledger.Persist.PersistentConnection := none
   /-- Logger for application-level logging -/
   logger : Option Chronicle.MultiLogger := none
+  /-- Parsed multipart data (for file uploads) -/
+  multipartData : Option MultipartData := none
 
 namespace Context
 
@@ -90,6 +93,28 @@ def acceptsJson (ctx : Context) : Bool :=
 /-- Get the content type of the request -/
 def contentType (ctx : Context) : Option String :=
   ctx.header "Content-Type"
+
+/-- Check if request is a multipart form submission -/
+def isMultipart (ctx : Context) : Bool :=
+  ctx.multipartData.isSome
+
+/-- Get an uploaded file by field name -/
+def file (ctx : Context) (name : String) : Option MultipartPart :=
+  ctx.multipartData.bind fun mpd => mpd.getFile name
+
+/-- Get all uploaded files with a given field name -/
+def filesByName (ctx : Context) (name : String) : List MultipartPart :=
+  ctx.multipartData.map (·.getFilesByName name) |>.getD []
+
+/-- Get all uploaded files -/
+def files (ctx : Context) : List MultipartPart :=
+  ctx.multipartData.map (·.getFiles) |>.getD []
+
+/-- Check if request has file uploads -/
+def hasFiles (ctx : Context) : Bool :=
+  match ctx.multipartData with
+  | some mpd => !mpd.getFiles.isEmpty
+  | none => false
 
 /-- Update session in context -/
 def withSession (ctx : Context) (f : Session → Session) : Context :=
