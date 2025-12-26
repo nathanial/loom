@@ -9,6 +9,7 @@ require scribe from ".." / "scribe"
 require crucible from ".." / "crucible"
 require ledger from ".." / "ledger"
 require chronicle from ".." / "chronicle"
+require staple from ".." / "staple"
 
 @[default_target]
 lean_lib Loom where
