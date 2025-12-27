@@ -289,13 +289,22 @@ private def matchRoute (pattern : String) (path : String) : Option (List (String
           none
     result.map List.reverse
 
-/-- Find matching route for request -/
+/-- Count parameter segments in a pattern -/
+private def countParams (pattern : String) : Nat :=
+  pattern.splitOn "/" |>.filter (·.startsWith ":") |>.length
+
+/-- Find matching route for request (prefers more specific routes with fewer parameters) -/
 private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : String) : Option (NamedRoute × List (String × String)) :=
   -- Remove query string from path
   let cleanPath := Form.pathWithoutQuery path
-  routes.routes.findSome? fun route =>
+  -- Collect all matching routes with their extracted params
+  let matchingRoutes := routes.routes.filterMap fun route =>
     if route.method != method then none
     else matchRoute route.pattern cleanPath |>.map (route, ·)
+  -- Sort by number of parameters (fewer = more specific = better)
+  let sorted := matchingRoutes.toArray.qsort fun (r1, _) (r2, _) =>
+    countParams r1.pattern < countParams r2.pattern
+  if h : sorted.size > 0 then some sorted[0] else none
 
 /-- Create the main handler -/
 def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : Citadel.Handler := fun req => do
