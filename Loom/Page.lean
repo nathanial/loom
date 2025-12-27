@@ -53,6 +53,25 @@ syntax pageParam := "(" ident ":" ident ")"
 /-- Page syntax: `page name "path" METHOD (params)* do body` -/
 syntax (name := pageCmd) "page" ident str ident pageParam* "do" doSeq : command
 
+/-- View syntax: `view name "path" (params)* do body` - GET route that renders HTML -/
+syntax (name := viewCmd) "view" ident str pageParam* "do" doSeq : command
+
+/-- Action syntax: `action name "path" METHOD (params)* do body` - mutation route -/
+syntax (name := actionCmd) "action" ident str ident pageParam* "do" doSeq : command
+
+/-! ## Macros -/
+
+/-- View expands to page with GET method -/
+macro_rules
+  | `(command| view $name:ident $path:str $params:pageParam* do $body:doSeq) =>
+    let getIdent := Lean.mkIdent `GET
+    `(command| page $name $path $getIdent $params* do $body)
+
+/-- Action expands to page with specified method -/
+macro_rules
+  | `(command| action $name:ident $path:str $method:ident $params:pageParam* do $body:doSeq) =>
+    `(command| page $name $path $method $params* do $body)
+
 /-! ## Elaborator -/
 
 /-- Parse a pageParam syntax node -/
@@ -162,7 +181,7 @@ def toSnakeCase (s : String) : String :=
   let result := chars.foldl (init := []) fun acc c =>
     if c.isUpper then
       if acc.isEmpty then [c.toLower]
-      else '_' :: c.toLower :: acc
+      else c.toLower :: '_' :: acc  -- Insert _ before the uppercase letter
     else c :: acc
   String.ofList result.reverse
 
@@ -226,9 +245,12 @@ private def genNameArm (currNs : Name) (p : PageInfo) : String :=
 /-- Generate registration line -/
 private def genRegisterLine (currNs : Name) (p : PageInfo) : String :=
   let localName := p.name.replacePrefix currNs .anonymous
+  let localHandlerName := p.handlerName.replacePrefix currNs .anonymous
+  -- Ensure handler name is properly formatted (use full path if needed)
+  let handlerStr := if localHandlerName.isAnonymous then p.handlerName.toString else localHandlerName.toString
   let methodLower := p.method.toLower
   let snakeName := toSnakeCase localName.toString
-  s!"    |>.{methodLower} \"{p.path}\" \"{snakeName}\" {p.handlerName}"
+  s!"    |>.{methodLower} \"{p.path}\" \"{snakeName}\" {handlerStr}"
 
 /-- Generate routes command: creates Route type and registerPages function -/
 syntax (name := generatePages) "#generate_pages" : command
