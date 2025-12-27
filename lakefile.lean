@@ -11,9 +11,15 @@ require ledger from ".." / "ledger"
 require chronicle from ".." / "chronicle"
 require staple from ".." / "staple"
 
+-- OpenSSL linking (required by citadel's TLS support)
+-- Lake doesn't propagate moreLinkArgs from dependencies, so we must add them here
+def opensslLinkArgs : Array String :=
+  #["-L/opt/homebrew/opt/openssl@3/lib", "-lssl", "-lcrypto"]
+
 @[default_target]
 lean_lib Loom where
   roots := #[`Loom]
+  moreLinkArgs := opensslLinkArgs
 
 lean_lib Tests where
   roots := #[`Tests]
@@ -21,3 +27,4 @@ lean_lib Tests where
 @[test_driver]
 lean_exe loom_tests where
   root := `Tests.Main
+  moreLinkArgs := opensslLinkArgs
