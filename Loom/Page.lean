@@ -43,6 +43,7 @@ structure PageInfo where
   method : String  -- "GET", "POST", etc.
   handlerName : Name
   params : Array RouteParam
+  middleware : Array String := #[]  -- Middleware term names as strings
   deriving Repr, Inhabited
 
 /-! ## Syntax -/
@@ -50,27 +51,41 @@ structure PageInfo where
 /-- Route parameter syntax: `(name : Type)` -/
 syntax pageParam := "(" ident ":" ident ")"
 
-/-- Page syntax: `page name "path" METHOD (params)* do body` -/
-syntax (name := pageCmd) "page" ident str ident pageParam* "do" doSeq : command
+/-- Middleware list syntax: `[mw1, mw2, ...]` -/
+syntax middlewareList := "[" term,* "]"
 
-/-- View syntax: `view name "path" (params)* do body` - GET route that renders HTML -/
-syntax (name := viewCmd) "view" ident str pageParam* "do" doSeq : command
+/-- Page syntax: `page name "path" METHOD [middleware]? (params)* do body` -/
+syntax (name := pageCmd) "page" ident str ident (middlewareList)? pageParam* "do" doSeq : command
 
-/-- Action syntax: `action name "path" METHOD (params)* do body` - mutation route -/
-syntax (name := actionCmd) "action" ident str ident pageParam* "do" doSeq : command
+/-- View syntax: `view name "path" [middleware]? (params)* do body` - GET route that renders HTML -/
+syntax (name := viewCmd) "view" ident str (middlewareList)? pageParam* "do" doSeq : command
+
+/-- Action syntax: `action name "path" METHOD [middleware]? (params)* do body` - mutation route -/
+syntax (name := actionCmd) "action" ident str ident (middlewareList)? pageParam* "do" doSeq : command
 
 /-! ## Macros -/
 
-/-- View expands to page with GET method -/
+/-- View expands to page with GET method (with middleware) -/
+macro_rules
+  | `(command| view $name:ident $path:str $mw:middlewareList $params:pageParam* do $body:doSeq) =>
+    let getIdent := Lean.mkIdent `GET
+    `(command| page $name $path $getIdent $mw $params* do $body)
+
+/-- View expands to page with GET method (without middleware) -/
 macro_rules
   | `(command| view $name:ident $path:str $params:pageParam* do $body:doSeq) =>
     let getIdent := Lean.mkIdent `GET
-    `(command| page $name $path $getIdent $params* do $body)
+    `(command| page $name $path $getIdent [] $params* do $body)
 
-/-- Action expands to page with specified method -/
+/-- Action expands to page with specified method (with middleware) -/
+macro_rules
+  | `(command| action $name:ident $path:str $method:ident $mw:middlewareList $params:pageParam* do $body:doSeq) =>
+    `(command| page $name $path $method $mw $params* do $body)
+
+/-- Action expands to page with specified method (without middleware) -/
 macro_rules
   | `(command| action $name:ident $path:str $method:ident $params:pageParam* do $body:doSeq) =>
-    `(command| page $name $path $method $params* do $body)
+    `(command| page $name $path $method [] $params* do $body)
 
 /-! ## Elaborator -/
 
@@ -81,86 +96,106 @@ private def parsePageParam (stx : Syntax) : CommandElabM RouteParam := do
     return { name := name.getId.toString, type := ty.getId.toString }
   | _ => throwError "Invalid page parameter syntax"
 
-@[command_elab pageCmd]
-def elabPage : CommandElab := fun stx => do
+/-- Extract middleware terms from middlewareList syntax -/
+private def parseMiddlewareList (stx : Option (TSyntax `Loom.Page.middlewareList)) : Array String :=
   match stx with
-  | `(command| page $name:ident $path:str $method:ident $params:pageParam* do $body:doSeq) =>
-    let pageName := name.getId
-    let pathStr := path.getString
-    let methodStr := method.getId.toString.toUpper
+  | none => #[]
+  | some mwList =>
+    -- middlewareList is `"[" term,* "]"`, extract the terms
+    let args := mwList.raw[1]  -- The Syntax.SepArray of terms
+    args.getSepArgs.map (·.reprint.getD "")
 
-    -- Parse parameters
-    let parsedParams ← params.mapM parsePageParam
+/-- Core elaboration logic for page command -/
+private def elabPageCore (name : TSyntax `ident) (path : TSyntax `str) (method : TSyntax `ident)
+    (mwList : Option (TSyntax `Loom.Page.middlewareList)) (params : Array (TSyntax `Loom.Page.pageParam))
+    (body : TSyntax `Lean.Parser.Term.doSeq) : CommandElabM Unit := do
+  let pageName := name.getId
+  let pathStr := path.getString
+  let methodStr := method.getId.toString.toUpper
+  let middleware := parseMiddlewareList mwList
 
-    -- Get current namespace
-    let currNs ← getCurrNamespace
-    let fullName := currNs ++ pageName
-    let handlerNameStr := pageName.toString ++ "_handler"
-    let infoNameStr := pageName.toString ++ "_pageInfo"
-    let handlerIdent := mkIdent (Name.mkSimple handlerNameStr)
+  -- Parse parameters
+  let parsedParams ← params.mapM parsePageParam
 
-    -- For parameterized routes, generate let bindings that extract params
-    -- The page body can use these names directly
-    if parsedParams.isEmpty then
-      -- Simple handler (no params)
-      let handlerDef ← `(command|
-        def $handlerIdent : Loom.Action := fun ctx => do
-          let (resp, ctx') ← (do $body : Loom.ActionM Herald.Core.Response).run ctx
-          pure (resp, ctx')
-      )
-      elabCommand handlerDef
-    else
-      -- For parameterized routes, we generate extractors first then the body
-      -- Build extractor let bindings
-      let mut extractorCmds : Array (TSyntax `Lean.Parser.Term.doSeqItem) := #[]
-      for p in parsedParams do
-        let paramNameIdent := mkIdent (Name.mkSimple p.name)
-        let paramNameStr := Syntax.mkStrLit p.name
-        let extractorItem ← if p.type == "String" then
-          `(Lean.Parser.Term.doSeqItem| let $paramNameIdent := ctx.paramD $paramNameStr "")
-        else
-          `(Lean.Parser.Term.doSeqItem| let $paramNameIdent := (ctx.paramD $paramNameStr "0").toNat?.getD 0)
-        extractorCmds := extractorCmds.push extractorItem
+  -- Get current namespace
+  let currNs ← getCurrNamespace
+  let fullName := currNs ++ pageName
+  let handlerNameStr := pageName.toString ++ "_handler"
+  let infoNameStr := pageName.toString ++ "_pageInfo"
+  let handlerIdent := mkIdent (Name.mkSimple handlerNameStr)
 
-      -- Generate handler with extractors and body
-      -- Use the extractors as a sequence of doSeqItems, then include body
-      let handlerDef ← `(command|
-        def $handlerIdent : Loom.Action := fun ctx => do
-          $extractorCmds*
-          let (resp, ctx') ← (do $body : Loom.ActionM Herald.Core.Response).run ctx
-          pure (resp, ctx')
-      )
-      elabCommand handlerDef
+  -- For parameterized routes, generate let bindings that extract params
+  -- The page body can use these names directly
+  if parsedParams.isEmpty then
+    -- Simple handler (no params)
+    let handlerDef ← `(command|
+      def $handlerIdent : Loom.Action := fun ctx => do
+        let (resp, ctx') ← (do $body : Loom.ActionM Herald.Core.Response).run ctx
+        pure (resp, ctx')
+    )
+    elabCommand handlerDef
+  else
+    -- For parameterized routes, we generate extractors first then the body
+    -- Build extractor let bindings
+    let mut extractorCmds : Array (TSyntax `Lean.Parser.Term.doSeqItem) := #[]
+    for p in parsedParams do
+      let paramNameIdent := mkIdent (Name.mkSimple p.name)
+      let paramNameStr := Syntax.mkStrLit p.name
+      let extractorItem ← if p.type == "String" then
+        `(Lean.Parser.Term.doSeqItem| let $paramNameIdent := ctx.paramD $paramNameStr "")
+      else
+        `(Lean.Parser.Term.doSeqItem| let $paramNameIdent := (ctx.paramD $paramNameStr "0").toNat?.getD 0)
+      extractorCmds := extractorCmds.push extractorItem
 
-    -- Create pageInfo definition with parameters
-    let fullHandlerName := currNs ++ (Name.mkSimple handlerNameStr)
-    let paramsArray := parsedParams.map fun p =>
-      s!"\{ name := \"{p.name}\", type := \"{p.type}\" }"
-    let paramsStr := "#[" ++ ", ".intercalate paramsArray.toList ++ "]"
+    -- Generate handler with extractors and body
+    -- Use the extractors as a sequence of doSeqItems, then include body
+    let handlerDef ← `(command|
+      def $handlerIdent : Loom.Action := fun ctx => do
+        $extractorCmds*
+        let (resp, ctx') ← (do $body : Loom.ActionM Herald.Core.Response).run ctx
+        pure (resp, ctx')
+    )
+    elabCommand handlerDef
 
-    let infoCode := s!"
+  -- Create pageInfo definition with parameters and middleware
+  let fullHandlerName := currNs ++ (Name.mkSimple handlerNameStr)
+  let paramsArray := parsedParams.map fun p =>
+    s!"\{ name := \"{p.name}\", type := \"{p.type}\" }"
+  let paramsStr := "#[" ++ ", ".intercalate paramsArray.toList ++ "]"
+  let middlewareArray := middleware.map fun m => s!"\"{m}\""
+  let middlewareStr := "#[" ++ ", ".intercalate middlewareArray.toList ++ "]"
+
+  let infoCode := s!"
 def {infoNameStr} : Loom.Page.PageInfo := \{
   name := `{fullName}
   path := \"{pathStr}\"
   method := \"{methodStr}\"
   handlerName := `{fullHandlerName}
   params := {paramsStr}
+  middleware := {middlewareStr}
 }
 "
-    let env ← getEnv
-    let opts ← getOptions
-    let fileName ← getFileName
-    let inputCtx := Parser.mkInputContext infoCode fileName
-    let parserState : Parser.ModuleParserState := {}
-    let commandState := Command.mkState env {} opts
-    let s ← IO.processCommands inputCtx parserState commandState
+  let env ← getEnv
+  let opts ← getOptions
+  let fileName ← getFileName
+  let inputCtx := Parser.mkInputContext infoCode fileName
+  let parserState : Parser.ModuleParserState := {}
+  let commandState := Command.mkState env {} opts
+  let s ← IO.processCommands inputCtx parserState commandState
 
-    for msg in s.commandState.messages.toList do
-      if msg.severity == MessageSeverity.error then
-        logError s!"Error in pageInfo generation: {← msg.data.toString}"
+  for msg in s.commandState.messages.toList do
+    if msg.severity == MessageSeverity.error then
+      logError s!"Error in pageInfo generation: {← msg.data.toString}"
 
-    setEnv s.commandState.env
+  setEnv s.commandState.env
 
+@[command_elab pageCmd]
+def elabPage : CommandElab := fun stx => do
+  match stx with
+  | `(command| page $name:ident $path:str $method:ident $mw:middlewareList $params:pageParam* do $body:doSeq) =>
+    elabPageCore name path method (some mw) params body
+  | `(command| page $name:ident $path:str $method:ident $params:pageParam* do $body:doSeq) =>
+    elabPageCore name path method none params body
   | _ => throwUnsupportedSyntax
 
 /-! ## Route Generation -/
@@ -250,7 +285,10 @@ private def genRegisterLine (currNs : Name) (p : PageInfo) : String :=
   let handlerStr := if localHandlerName.isAnonymous then p.handlerName.toString else localHandlerName.toString
   let methodLower := p.method.toLower
   let snakeName := toSnakeCase localName.toString
-  s!"    |>.{methodLower} \"{p.path}\" \"{snakeName}\" {handlerStr}"
+  -- Include middleware list (empty list if no middleware)
+  let mwStr := if p.middleware.isEmpty then "[]"
+               else "[" ++ ", ".intercalate p.middleware.toList ++ "]"
+  s!"    |>.{methodLower} \"{p.path}\" \"{snakeName}\" {mwStr} {handlerStr}"
 
 /-- Generate routes command: creates Route type and registerPages function -/
 syntax (name := generatePages) "#generate_pages" : command

@@ -173,4 +173,58 @@ def queryLogging : Citadel.Middleware := fun handler req => do
 
 end Middleware
 
+-- ============================================================================
+-- Route-level middleware (operates on Context, not raw HTTP)
+-- ============================================================================
+
+/-- Route middleware wraps an Action, can short-circuit or continue.
+    Unlike Citadel.Middleware which operates on raw HTTP requests,
+    RouteMiddleware has access to the parsed Context (session, params, db, etc.). -/
+def RouteMiddleware := Action → Action
+
+namespace RouteMiddleware
+
+/-- Identity middleware that passes through unchanged -/
+def identity : RouteMiddleware := id
+
+/-- Compose two route middleware (m1 wraps m2) -/
+def compose (m1 m2 : RouteMiddleware) : RouteMiddleware :=
+  fun action => m1 (m2 action)
+
+/-- Chain a list of route middleware (first in list is outermost) -/
+def chain (middlewares : List RouteMiddleware) : RouteMiddleware :=
+  middlewares.foldr compose identity
+
+/-- Create middleware that redirects if a condition fails -/
+def guard (check : Context → Bool) (redirectTo : String)
+    (flashKey : String := "error") (flashMsg : String := "") : RouteMiddleware :=
+  fun action ctx => do
+    if check ctx then
+      action ctx
+    else
+      let ctx' := if flashMsg.isEmpty then ctx
+                  else ctx.withFlash fun f => f.set flashKey flashMsg
+      Action.redirect redirectTo ctx'
+
+/-- Create middleware that runs an IO check and redirects on failure -/
+def guardM (check : Context → IO Bool) (redirectTo : String)
+    (flashKey : String := "error") (flashMsg : String := "") : RouteMiddleware :=
+  fun action ctx => do
+    if ← check ctx then
+      action ctx
+    else
+      let ctx' := if flashMsg.isEmpty then ctx
+                  else ctx.withFlash fun f => f.set flashKey flashMsg
+      Action.redirect redirectTo ctx'
+
+/-- Create middleware that modifies context before passing to action -/
+def mapContext (f : Context → Context) : RouteMiddleware :=
+  fun action ctx => action (f ctx)
+
+/-- Create middleware that modifies context using IO before passing to action -/
+def mapContextM (f : Context → IO Context) : RouteMiddleware :=
+  fun action ctx => do action (← f ctx)
+
+end RouteMiddleware
+
 end Loom

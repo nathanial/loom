@@ -18,6 +18,7 @@ import Loom.Htmx
 import Loom.IncludeStr
 import Loom.Json
 import Loom.Middleware
+import Loom.Auth
 import Loom.Static
 import Loom.Router
 import Loom.Routing

@@ -40,29 +40,35 @@ def withSecret (secret : String) : App :=
 def use (app : App) (mw : Citadel.Middleware) : App :=
   { app with middlewares := app.middlewares ++ [mw] }
 
-/-- Add a named route (accepts Action or ActionM Response) -/
-def route [ToAction α] (app : App) (name : String) (method : Herald.Core.Method) (pattern : String) (action : α) : App :=
-  { app with routes := app.routes.add name method pattern action }
+/-- Add a named route with optional middleware (accepts Action or ActionM Response) -/
+def route [ToAction α] (app : App) (name : String) (method : Herald.Core.Method) (pattern : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  { app with routes := app.routes.add name method pattern middleware action }
 
-/-- Add a GET route -/
-def get [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
-  app.route name .GET pattern action
+/-- Add a GET route with optional middleware -/
+def get [ToAction α] (app : App) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route name .GET pattern middleware action
 
-/-- Add a POST route -/
-def post [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
-  app.route name .POST pattern action
+/-- Add a POST route with optional middleware -/
+def post [ToAction α] (app : App) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route name .POST pattern middleware action
 
-/-- Add a PUT route -/
-def put [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
-  app.route name .PUT pattern action
+/-- Add a PUT route with optional middleware -/
+def put [ToAction α] (app : App) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route name .PUT pattern middleware action
 
-/-- Add a DELETE route -/
-def delete [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
-  app.route name .DELETE pattern action
+/-- Add a DELETE route with optional middleware -/
+def delete [ToAction α] (app : App) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route name .DELETE pattern middleware action
 
-/-- Add a PATCH route -/
-def patch [ToAction α] (app : App) (pattern : String) (name : String) (action : α) : App :=
-  app.route name .PATCH pattern action
+/-- Add a PATCH route with optional middleware -/
+def patch [ToAction α] (app : App) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route name .PATCH pattern middleware action
 
 /-! ## Type-safe route registration -/
 
@@ -73,30 +79,36 @@ class HasRouteInfo (R : Type) where
   /-- Get the route name in snake_case (e.g., "kanban_get_column") -/
   routeName : R → String
 
-/-- Add a route using type-safe route info.
+/-- Add a route using type-safe route info with optional middleware.
     Extracts pattern and name from the route type automatically. -/
-def route' [ToAction α] [HasRouteInfo R] (app : App) (method : Herald.Core.Method) (r : R) (action : α) : App :=
-  app.route (HasRouteInfo.routeName r) method (HasRouteInfo.pattern r) action
+def route' [ToAction α] [HasRouteInfo R] (app : App) (method : Herald.Core.Method) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route (HasRouteInfo.routeName r) method (HasRouteInfo.pattern r) middleware action
 
-/-- Add a GET route using type-safe route info -/
-def get' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
-  app.route' .GET r action
+/-- Add a GET route using type-safe route info with optional middleware -/
+def get' [ToAction α] [HasRouteInfo R] (app : App) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route' .GET r middleware action
 
-/-- Add a POST route using type-safe route info -/
-def post' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
-  app.route' .POST r action
+/-- Add a POST route using type-safe route info with optional middleware -/
+def post' [ToAction α] [HasRouteInfo R] (app : App) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route' .POST r middleware action
 
-/-- Add a PUT route using type-safe route info -/
-def put' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
-  app.route' .PUT r action
+/-- Add a PUT route using type-safe route info with optional middleware -/
+def put' [ToAction α] [HasRouteInfo R] (app : App) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route' .PUT r middleware action
 
-/-- Add a DELETE route using type-safe route info -/
-def delete' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
-  app.route' .DELETE r action
+/-- Add a DELETE route using type-safe route info with optional middleware -/
+def delete' [ToAction α] [HasRouteInfo R] (app : App) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route' .DELETE r middleware action
 
-/-- Add a PATCH route using type-safe route info -/
-def patch' [ToAction α] [HasRouteInfo R] (app : App) (r : R) (action : α) : App :=
-  app.route' .PATCH r action
+/-- Add a PATCH route using type-safe route info with optional middleware -/
+def patch' [ToAction α] [HasRouteInfo R] (app : App) (r : R)
+    (middleware : List RouteMiddleware := []) (action : α) : App :=
+  app.route' .PATCH r middleware action
 
 /-- Configure database with a custom connection factory.
     This automatically adds database error recovery middleware. -/
@@ -310,8 +322,9 @@ def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist
         |>.withText "CSRF token validation failed"
         |>.build)
     else
-      -- Execute action (returns response and modified context)
-      let (resp, ctx') ← route.action ctx
+      -- Apply route-level middleware chain, then execute action
+      let wrappedAction := RouteMiddleware.chain route.middleware route.action
+      let (resp, ctx') ← wrappedAction ctx
       -- Write updated connection back to shared ref (if using cached db)
       match cachedPersistentDbRef, ctx'.persistentDb with
       | some ref, some updatedPc => ref.set updatedPc

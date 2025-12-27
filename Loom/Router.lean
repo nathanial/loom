@@ -4,15 +4,17 @@
 import Citadel
 import Loom.Controller
 import Loom.ActionM
+import Loom.Middleware
 
 namespace Loom
 
-/-- A named route with associated action -/
+/-- A named route with associated action and optional middleware -/
 structure NamedRoute where
   name : String
   method : Herald.Core.Method
   pattern : String
   action : Action
+  middleware : List RouteMiddleware := []
 
 /-- Collection of named routes -/
 structure Routes where
@@ -23,29 +25,35 @@ namespace Routes
 /-- Empty routes -/
 def empty : Routes := { routes := [] }
 
-/-- Add a named route (accepts Action or ActionM Response) -/
-def add [ToAction α] (r : Routes) (name : String) (method : Herald.Core.Method) (pattern : String) (action : α) : Routes :=
-  { routes := r.routes ++ [{ name, method, pattern, action := ToAction.toAction action }] }
+/-- Add a named route with optional middleware (accepts Action or ActionM Response) -/
+def add [ToAction α] (r : Routes) (name : String) (method : Herald.Core.Method) (pattern : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  { routes := r.routes ++ [{ name, method, pattern, action := ToAction.toAction action, middleware }] }
 
-/-- Add a GET route -/
-def get [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
-  r.add name .GET pattern action
+/-- Add a GET route with optional middleware -/
+def get [ToAction α] (r : Routes) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  r.add name .GET pattern middleware action
 
-/-- Add a POST route -/
-def post [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
-  r.add name .POST pattern action
+/-- Add a POST route with optional middleware -/
+def post [ToAction α] (r : Routes) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  r.add name .POST pattern middleware action
 
-/-- Add a PUT route -/
-def put [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
-  r.add name .PUT pattern action
+/-- Add a PUT route with optional middleware -/
+def put [ToAction α] (r : Routes) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  r.add name .PUT pattern middleware action
 
-/-- Add a DELETE route -/
-def delete [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
-  r.add name .DELETE pattern action
+/-- Add a DELETE route with optional middleware -/
+def delete [ToAction α] (r : Routes) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  r.add name .DELETE pattern middleware action
 
-/-- Add a PATCH route -/
-def patch [ToAction α] (r : Routes) (pattern : String) (name : String) (action : α) : Routes :=
-  r.add name .PATCH pattern action
+/-- Add a PATCH route with optional middleware -/
+def patch [ToAction α] (r : Routes) (pattern : String) (name : String)
+    (middleware : List RouteMiddleware := []) (action : α) : Routes :=
+  r.add name .PATCH pattern middleware action
 
 /-- Find a route by name -/
 def findByName (r : Routes) (name : String) : Option NamedRoute :=
