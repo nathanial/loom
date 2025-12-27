@@ -13,6 +13,7 @@ import Loom.Flash
 import Loom.Database
 import Loom.Controller
 import Loom.Transaction
+import Loom.Audit
 import Loom.ActionM
 import Loom.Htmx
 import Loom.IncludeStr

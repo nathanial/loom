@@ -6,6 +6,7 @@
 -/
 import Loom.Controller
 import Loom.Transaction
+import Loom.Audit
 
 namespace Loom
 
@@ -186,6 +187,55 @@ def withNewEntities (n : Nat) (f : List Ledger.EntityId → Ledger.TxM α)
 def withNewEntities! (n : Nat) (f : List Ledger.EntityId → Ledger.TxM α)
     : ActionM (List Ledger.EntityId × α) := do
   match ← withNewEntities n f with
+  | .ok pair => pure pair
+  | .error e => throw (IO.userError s!"Transaction failed: {e}")
+
+/-! ## Audit Transaction Monad Integration -/
+
+/-- Run an AuditTxM transaction builder, commit, and log all audit entries.
+    Returns the computation result on success, or an error. -/
+def runAuditTx (m : AuditTxM α) : ActionM (Except Ledger.TxError α) := do
+  let ctx ← get
+  match ctx.database with
+  | none => pure (.error (.custom "No database connection"))
+  | some db =>
+    let (result, ops, auditEntries) := AuditTxM.build m db
+    if ops.isEmpty then
+      -- Log audit entries even if no db ops
+      let ctx ← get
+      for entry in auditEntries do
+        logAudit ctx entry.op entry.entity entry.entityId entry.details
+      pure (.ok result)
+    else
+      match ← transact ops.toList with
+      | .ok () =>
+        -- Log audit entries after successful commit
+        let ctx ← get
+        for entry in auditEntries do
+          logAudit ctx entry.op entry.entity entry.entityId entry.details
+        pure (.ok result)
+      | .error e => pure (.error e)
+
+/-- Run an AuditTxM transaction builder and commit, throwing on error -/
+def runAuditTx! (m : AuditTxM α) : ActionM α := do
+  match ← runAuditTx m with
+  | .ok result => pure result
+  | .error e => throw (IO.userError s!"Transaction failed: {e}")
+
+/-- Allocate a new entity ID and run an AuditTxM transaction builder with it.
+    Returns the allocated ID and computation result on success. -/
+def withNewEntityAudit (f : Ledger.EntityId → AuditTxM α)
+    : ActionM (Except Ledger.TxError (Ledger.EntityId × α)) := do
+  match ← allocEntityId with
+  | none => pure (.error (.custom "No database connection"))
+  | some eid =>
+    match ← runAuditTx (f eid) with
+    | .ok result => pure (.ok (eid, result))
+    | .error e => pure (.error e)
+
+/-- Allocate a new entity ID and run an AuditTxM transaction builder, throwing on error -/
+def withNewEntityAudit! (f : Ledger.EntityId → AuditTxM α) : ActionM (Ledger.EntityId × α) := do
+  match ← withNewEntityAudit f with
   | .ok pair => pure pair
   | .error e => throw (IO.userError s!"Transaction failed: {e}")
 
