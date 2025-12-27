@@ -257,6 +257,10 @@ def json (content : String) : ActionM Herald.Core.Response :=
 def redirect (location : String) (permanent : Bool := false) : ActionM Herald.Core.Response :=
   pure (Citadel.Response.redirect location permanent)
 
+/-- Create a 303 See Other redirect (forces GET on redirect, use after POST/PUT/DELETE) -/
+def seeOther (location : String) : ActionM Herald.Core.Response :=
+  pure (Citadel.Response.seeOther location)
+
 /-- Create a not found response -/
 def notFound (message : String := "Not Found") : ActionM Herald.Core.Response :=
   pure (Citadel.Response.notFound message)

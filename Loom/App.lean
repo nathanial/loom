@@ -293,7 +293,11 @@ private def matchRoute (pattern : String) (path : String) : Option (List (String
 private def countParams (pattern : String) : Nat :=
   pattern.splitOn "/" |>.filter (·.startsWith ":") |>.length
 
-/-- Find matching route for request (prefers more specific routes with fewer parameters) -/
+/-- Count literal (non-parameter) segments in a pattern -/
+private def countLiterals (pattern : String) : Nat :=
+  pattern.splitOn "/" |>.filter (fun s => s != "" && !s.startsWith ":") |>.length
+
+/-- Find matching route for request (prefers more specific routes) -/
 private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : String) : Option (NamedRoute × List (String × String)) :=
   -- Remove query string from path
   let cleanPath := Form.pathWithoutQuery path
@@ -301,9 +305,12 @@ private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : St
   let matchingRoutes := routes.routes.filterMap fun route =>
     if route.method != method then none
     else matchRoute route.pattern cleanPath |>.map (route, ·)
-  -- Sort by number of parameters (fewer = more specific = better)
+  -- Sort by specificity: more literals is better, then fewer params is better
   let sorted := matchingRoutes.toArray.qsort fun (r1, _) (r2, _) =>
-    countParams r1.pattern < countParams r2.pattern
+    let lit1 := countLiterals r1.pattern
+    let lit2 := countLiterals r2.pattern
+    if lit1 != lit2 then lit1 > lit2  -- More literals = more specific
+    else countParams r1.pattern < countParams r2.pattern  -- Fewer params = more specific
   if h : sorted.size > 0 then some sorted[0] else none
 
 /-- Create the main handler -/
