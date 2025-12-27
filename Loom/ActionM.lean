@@ -5,6 +5,7 @@
   Use `.toAction` to convert back to the traditional `Action` type for routing.
 -/
 import Loom.Controller
+import Loom.Transaction
 
 namespace Loom
 
@@ -128,6 +129,64 @@ def transact (tx : Ledger.Transaction) : ActionM (Except Ledger.TxError Unit) :=
 def transact! (tx : Ledger.Transaction) : ActionM Unit := do
   match ← transact tx with
   | .ok () => pure ()
+  | .error e => throw (IO.userError s!"Transaction failed: {e}")
+
+/-! ## Transaction Monad Integration -/
+
+/-- Run a TxM transaction builder and commit the result.
+    Returns the computation result on success, or an error. -/
+def runTx (m : Ledger.TxM α) : ActionM (Except Ledger.TxError α) := do
+  let ctx ← get
+  match ctx.database with
+  | none => pure (.error (.custom "No database connection"))
+  | some db =>
+    let (result, ops) := Ledger.TxM.build m db
+    if ops.isEmpty then
+      pure (.ok result)
+    else
+      match ← transact ops.toList with
+      | .ok () => pure (.ok result)
+      | .error e => pure (.error e)
+
+/-- Run a TxM transaction builder and commit, throwing on error -/
+def runTx! (m : Ledger.TxM α) : ActionM α := do
+  match ← runTx m with
+  | .ok result => pure result
+  | .error e => throw (IO.userError s!"Transaction failed: {e}")
+
+/-- Allocate a new entity ID and run a transaction builder with it.
+    Returns the allocated ID and computation result on success. -/
+def withNewEntity (f : Ledger.EntityId → Ledger.TxM α) : ActionM (Except Ledger.TxError (Ledger.EntityId × α)) := do
+  match ← allocEntityId with
+  | none => pure (.error (.custom "No database connection"))
+  | some eid =>
+    match ← runTx (f eid) with
+    | .ok result => pure (.ok (eid, result))
+    | .error e => pure (.error e)
+
+/-- Allocate a new entity ID and run a transaction builder, throwing on error -/
+def withNewEntity! (f : Ledger.EntityId → Ledger.TxM α) : ActionM (Ledger.EntityId × α) := do
+  match ← withNewEntity f with
+  | .ok pair => pure pair
+  | .error e => throw (IO.userError s!"Transaction failed: {e}")
+
+/-- Allocate multiple entity IDs and run a transaction builder with them -/
+def withNewEntities (n : Nat) (f : List Ledger.EntityId → Ledger.TxM α)
+    : ActionM (Except Ledger.TxError (List Ledger.EntityId × α)) := do
+  let mut eids : List Ledger.EntityId := []
+  for _ in [:n] do
+    match ← allocEntityId with
+    | none => return .error (.custom "No database connection")
+    | some eid => eids := eids ++ [eid]
+  match ← runTx (f eids) with
+  | .ok result => pure (.ok (eids, result))
+  | .error e => pure (.error e)
+
+/-- Allocate multiple entity IDs and run a transaction builder, throwing on error -/
+def withNewEntities! (n : Nat) (f : List Ledger.EntityId → Ledger.TxM α)
+    : ActionM (List Ledger.EntityId × α) := do
+  match ← withNewEntities n f with
+  | .ok pair => pure pair
   | .error e => throw (IO.userError s!"Transaction failed: {e}")
 
 /-! ## Response Builders -/
