@@ -145,6 +145,57 @@ def compose (middlewares : List Citadel.Middleware) : Citadel.Middleware :=
   middlewares.foldr (init := id) fun mw acc => fun handler => mw (acc handler)
 
 -- ============================================================================
+-- HTTPS Redirect
+-- ============================================================================
+
+/-- Build HTTPS redirect URL from request.
+    Uses the Host header to determine the target domain.
+    If httpsPort is not 443, it's included in the URL. -/
+private def buildHttpsUrl (req : Citadel.ServerRequest) (httpsPort : UInt16 := 443) : String :=
+  let host := req.header "Host" |>.getD "localhost"
+  -- Strip any existing port from host
+  let hostWithoutPort := match host.splitOn ":" with
+    | h :: _ => h
+    | [] => host
+  let portSuffix := if httpsPort == 443 then "" else s!":{httpsPort}"
+  s!"https://{hostWithoutPort}{portSuffix}{req.fullPath}"
+
+/-- HTTPS redirect middleware.
+    Redirects all requests to their HTTPS equivalent using 301 Moved Permanently.
+    Use this on an HTTP-only server (port 80) to redirect traffic to HTTPS.
+
+    Parameters:
+    - `httpsPort`: The HTTPS port to redirect to (default 443, omitted from URL if 443)
+
+    Example usage:
+    ```lean
+    -- Create a simple HTTP redirect server
+    let httpServer := Citadel.Server.new
+      { port := 80, host := "0.0.0.0" }
+      (Citadel.Router.empty.get "*" fun _ => pure Citadel.Response.notFound)
+    httpServer.use (Middleware.httpsRedirect 443)
+    ```
+-/
+def httpsRedirect (httpsPort : UInt16 := 443) : Citadel.Middleware := fun _handler req => do
+  let url := buildHttpsUrl req httpsPort
+  -- Use 301 for permanent redirect (browsers will cache and auto-redirect)
+  pure (Citadel.ResponseBuilder.withStatus Herald.Core.StatusCode.movedPermanently
+    |>.withHeader "Location" url
+    |>.withHeader "Cache-Control" "max-age=31536000"  -- Cache for 1 year
+    |>.withText s!"Redirecting to {url}"
+    |>.build)
+
+/-- HTTPS redirect middleware with temporary redirect (302).
+    Same as httpsRedirect but uses 302 Found instead of 301.
+    Use this during testing or when the redirect might change. -/
+def httpsRedirectTemporary (httpsPort : UInt16 := 443) : Citadel.Middleware := fun _handler req => do
+  let url := buildHttpsUrl req httpsPort
+  pure (Citadel.ResponseBuilder.withStatus Herald.Core.StatusCode.found
+    |>.withHeader "Location" url
+    |>.withText s!"Redirecting to {url}"
+    |>.build)
+
+-- ============================================================================
 -- Database middleware
 -- ============================================================================
 

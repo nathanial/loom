@@ -418,6 +418,110 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
     IO.println s!"Loom starting on http://{host}:{port}"
     server.run
 
+/-- Run the application with HTTPS and automatic HTTP→HTTPS redirect.
+    Starts two servers:
+    - HTTPS server on the specified port (default 443)
+    - HTTP redirect server on httpPort (default 80)
+
+    Example:
+    ```lean
+    app.runWithHttpsRedirect
+      (host := "0.0.0.0")
+      (httpsPort := 443)
+      (httpPort := 80)
+      (tlsConfig := { certFile := "/path/to/cert.pem", keyFile := "/path/to/key.pem" })
+    ```
+-/
+def runWithHttpsRedirect (app : App)
+    (host : String := "0.0.0.0")
+    (httpsPort : UInt16 := 443)
+    (httpPort : UInt16 := 80)
+    (tlsConfig : Citadel.TlsConfig) : IO Unit := do
+  -- Initialize persistent database connection once at startup
+  let cachedDbRef ← match app.config.dbConfig with
+    | some dbConfig =>
+      match dbConfig.journalPath with
+      | some path =>
+        let pc ← Ledger.Persist.PersistentConnection.create path
+        IO.println s!"Database: {pc.db.size} datoms loaded from {path}"
+        let ref ← IO.mkRef pc
+        pure (some ref)
+      | none => pure none
+    | none => pure none
+
+  -- Create HTTP redirect server (runs in background)
+  let redirectHandler : Citadel.Handler := fun req => do
+    let hostHeader := req.header "Host" |>.getD "localhost"
+    let hostWithoutPort := match hostHeader.splitOn ":" with
+      | h :: _ => h
+      | [] => hostHeader
+    let portSuffix := if httpsPort == 443 then "" else s!":{httpsPort}"
+    let url := s!"https://{hostWithoutPort}{portSuffix}{req.fullPath}"
+    pure (Citadel.ResponseBuilder.withStatus Herald.Core.StatusCode.movedPermanently
+      |>.withHeader "Location" url
+      |>.withHeader "Cache-Control" "max-age=31536000"
+      |>.withText s!"Redirecting to {url}"
+      |>.build)
+
+  let httpConfig : Citadel.ServerConfig := { host := host, port := httpPort }
+  let httpServer := Citadel.Server.create httpConfig
+    |>.route .GET "/*" redirectHandler
+    |>.route .POST "/*" redirectHandler
+    |>.route .PUT "/*" redirectHandler
+    |>.route .DELETE "/*" redirectHandler
+    |>.route .PATCH "/*" redirectHandler
+    |>.route .OPTIONS "/*" redirectHandler
+
+  -- Start HTTP redirect server in background task
+  let _ ← IO.asTask (prio := .dedicated) do
+    IO.println s!"HTTP redirect server on http://{host}:{httpPort} → https://...:{httpsPort}"
+    httpServer.run
+
+  -- Build and run HTTPS server (main thread)
+  let httpsConfig : Citadel.ServerConfig := {
+    host := host
+    port := httpsPort
+    tls := some tlsConfig
+  }
+
+  if app.sseEnabled then
+    let manager ← Citadel.SSE.ConnectionManager.create
+    SSE.setup manager
+    let handler := app.toHandler cachedDbRef
+    let composedMiddleware := Middleware.compose app.middlewares
+    let finalHandler := composedMiddleware handler
+
+    let server := Citadel.Server.create httpsConfig
+      |>.withSSE manager
+      |>.route .GET "/*" finalHandler
+      |>.route .POST "/*" finalHandler
+      |>.route .PUT "/*" finalHandler
+      |>.route .DELETE "/*" finalHandler
+      |>.route .PATCH "/*" finalHandler
+      |>.route .OPTIONS "/*" finalHandler
+
+    let server := app.sseRoutes.foldl (fun s (pattern, topic) => s.sseRoute pattern topic) server
+
+    IO.println s!"HTTPS server on https://{host}:{httpsPort}"
+    if app.sseRoutes.length > 0 then
+      IO.println s!"SSE endpoints: {app.sseRoutes.map Prod.fst}"
+    server.run
+  else
+    let handler := app.toHandler cachedDbRef
+    let composedMiddleware := Middleware.compose app.middlewares
+    let finalHandler := composedMiddleware handler
+
+    let server := Citadel.Server.create httpsConfig
+      |>.route .GET "/*" finalHandler
+      |>.route .POST "/*" finalHandler
+      |>.route .PUT "/*" finalHandler
+      |>.route .DELETE "/*" finalHandler
+      |>.route .PATCH "/*" finalHandler
+      |>.route .OPTIONS "/*" finalHandler
+
+    IO.println s!"HTTPS server on https://{host}:{httpsPort}"
+    server.run
+
 /-- URL helpers for the app -/
 def urlHelpers (app : App) (baseUrl : String := "") : UrlHelpers :=
   UrlHelpers.create app.routes baseUrl
