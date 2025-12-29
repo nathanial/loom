@@ -16,7 +16,7 @@ A Rails-like web framework for Lean 4, weaving together Citadel (HTTP), Scribe (
 Add to your `lakefile.lean`:
 
 ```lean
-require loom from ".." / "loom"
+require loom from git "https://github.com/nathanial/loom" @ "v0.0.1"
 ```
 
 ## Quick Start
