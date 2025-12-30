@@ -1,5 +1,4 @@
 # Lake build artifacts
-.lake/
 lake-packages/
 build/
 
@@ -18,3 +17,5 @@ Thumbs.db
 *.olean
 *.ilean
 *.trace
+.lake
+lake-manifest.json
