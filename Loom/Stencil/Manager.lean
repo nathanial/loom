@@ -33,10 +33,10 @@ structure Manager where
   engine : StencilEngine
   /-- Regular templates (name -> entry) -/
   templates : Std.HashMap String TemplateEntry
-  /-- Partial templates (name -> template) -/
-  partials : Std.HashMap String StencilTemplate
-  /-- Layout templates (name -> template) -/
-  layouts : Std.HashMap String StencilTemplate
+  /-- Partial templates (name -> entry with mtime for hot reload) -/
+  partials : Std.HashMap String TemplateEntry
+  /-- Layout templates (name -> entry with mtime for hot reload) -/
+  layouts : Std.HashMap String TemplateEntry
   /-- Last time we checked for file changes -/
   lastReloadCheck : UInt64
   deriving Inhabited
@@ -123,20 +123,20 @@ def discover (config : Config) : IO Manager := do
       let name := computeTemplateName config.templateDir config.extension path
       let mtime ← getFileMtime path
 
+      let entry : TemplateEntry := { template := tmpl, path := path, mtime := mtime }
       if isPartialFile path then
         -- Register as partial (strip leading _ from name)
         let partialName := if name.startsWith "_" then name.drop 1 else name
-        manager := { manager with partials := manager.partials.insert partialName tmpl }
+        manager := { manager with partials := manager.partials.insert partialName entry }
         if config.autoRegisterPartials then
           IO.println s!"  Partial: {partialName}"
       else if isLayoutFile config.templateDir path then
         -- Register as layout (strip layouts/ prefix)
         let layoutName := if name.startsWith "layouts/" then name.drop 8 else name
-        manager := { manager with layouts := manager.layouts.insert layoutName tmpl }
+        manager := { manager with layouts := manager.layouts.insert layoutName entry }
         IO.println s!"  Layout: {layoutName}"
       else
         -- Regular template
-        let entry : TemplateEntry := { template := tmpl, path := path, mtime := mtime }
         manager := { manager with templates := manager.templates.insert name entry }
         IO.println s!"  Template: {name}"
     | .error e =>
@@ -151,11 +151,16 @@ def getTemplate (m : Manager) (name : String) : Option StencilTemplate :=
 
 /-- Get a layout by name -/
 def getLayout (m : Manager) (name : String) : Option StencilTemplate :=
-  m.layouts.get? name
+  m.layouts.get? name |>.map (·.template)
 
 /-- Get a partial by name -/
 def getPartial (m : Manager) (name : String) : Option StencilTemplate :=
-  m.partials.get? name
+  m.partials.get? name |>.map (·.template)
+
+/-- Get all partials as a HashMap of templates (for Stencil context) -/
+def getPartials (m : Manager) : Std.HashMap String StencilTemplate :=
+  m.partials.fold (init := {}) fun acc name entry =>
+    acc.insert name entry.template
 
 /-- Check if hot reload should run (based on interval) -/
 def shouldCheckReload (m : Manager) : IO Bool := do
@@ -183,20 +188,71 @@ private def reloadTemplate (m : Manager) (name : String) (entry : TemplateEntry)
   else
     pure (m, false)
 
-/-- Check all templates for changes and reload if needed -/
-def checkAndReload (m : Manager) : IO Manager := do
-  if !m.config.hotReload then return m
+/-- Reload a single layout if its mtime has changed -/
+private def reloadLayout (m : Manager) (name : String) (entry : TemplateEntry)
+    : IO (Manager × Bool) := do
+  let currentMtime ← getFileMtime entry.path
+  if currentMtime != entry.mtime then
+    IO.println s!"Hot reload: layout/{name}"
+    let content ← IO.FS.readFile entry.path
+    match Stencil.parse content with
+    | .ok tmpl =>
+      let newEntry := { entry with template := tmpl, mtime := currentMtime }
+      let newLayouts := m.layouts.insert name newEntry
+      pure ({ m with layouts := newLayouts }, true)
+    | .error e =>
+      IO.eprintln s!"Hot reload error in layout/{name}: {e}"
+      pure (m, false)
+  else
+    pure (m, false)
+
+/-- Reload a single partial if its mtime has changed -/
+private def reloadPartial (m : Manager) (name : String) (entry : TemplateEntry)
+    : IO (Manager × Bool) := do
+  let currentMtime ← getFileMtime entry.path
+  if currentMtime != entry.mtime then
+    IO.println s!"Hot reload: partial/{name}"
+    let content ← IO.FS.readFile entry.path
+    match Stencil.parse content with
+    | .ok tmpl =>
+      let newEntry := { entry with template := tmpl, mtime := currentMtime }
+      let newPartials := m.partials.insert name newEntry
+      pure ({ m with partials := newPartials }, true)
+    | .error e =>
+      IO.eprintln s!"Hot reload error in partial/{name}: {e}"
+      pure (m, false)
+  else
+    pure (m, false)
+
+/-- Check all templates for changes and reload if needed.
+    Returns (updatedManager, templatesChanged) -/
+def checkAndReload (m : Manager) : IO (Manager × Bool) := do
+  if !m.config.hotReload then return (m, false)
 
   let mut manager := m
+  let mut anyChanged := false
 
   -- Check regular templates
   for (name, entry) in m.templates.toList do
-    let (newManager, _) ← reloadTemplate manager name entry
+    let (newManager, changed) ← reloadTemplate manager name entry
     manager := newManager
+    if changed then anyChanged := true
+
+  -- Check layouts
+  for (name, entry) in m.layouts.toList do
+    let (newManager, changed) ← reloadLayout manager name entry
+    manager := newManager
+    if changed then anyChanged := true
+
+  -- Check partials
+  for (name, entry) in m.partials.toList do
+    let (newManager, changed) ← reloadPartial manager name entry
+    manager := newManager
+    if changed then anyChanged := true
 
   -- Update last check time
   let now ← IO.monoNanosNow
-  pure { manager with lastReloadCheck := (now / 1000000).toUInt64 }
+  pure ({ manager with lastReloadCheck := (now / 1000000).toUInt64 }, anyChanged)
 
 /-- Number of loaded templates -/
 def templateCount (m : Manager) : Nat :=
@@ -209,6 +265,21 @@ def partialCount (m : Manager) : Nat :=
 /-- Number of loaded layouts -/
 def layoutCount (m : Manager) : Nat :=
   m.layouts.size
+
+/-- Start a background watcher task that polls for template changes.
+    When changes are detected, calls the provided callback.
+    Returns a task that runs indefinitely. -/
+def startWatcher (managerRef : IO.Ref Manager) (onChanged : IO Unit) : IO (Task (Except IO.Error Unit)) := do
+  IO.asTask do
+    while true do
+      IO.sleep (500 : UInt32)  -- Poll every 500ms
+      let manager ← managerRef.get
+      if manager.config.hotReload then
+        if ← manager.shouldCheckReload then
+          let (updated, changed) ← manager.checkAndReload
+          managerRef.set updated
+          if changed then
+            onChanged
 
 end Manager
 

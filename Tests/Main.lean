@@ -4,9 +4,19 @@
 import Crucible
 import Loom
 import Ledger
+import Stencil
 
 open Crucible
 open Loom
+
+/-- Helper to get last n characters of a string -/
+def takeRight (s : String) (n : Nat) : String :=
+  if s.length <= n then s
+  else s.drop (s.length - n)
+
+/-- Helper to check if string contains substring -/
+def containsSubstr (s sub : String) : Bool :=
+  (s.splitOn sub).length > 1
 
 -- ============================================================================
 -- Cookie Tests
@@ -520,6 +530,163 @@ test "discover with 'templates' dir name (like homebase-app)" := do
   IO.FS.removeDirAll (testDir ++ "/admin")
   IO.FS.removeDirAll (testDir ++ "/layouts")
   IO.FS.removeDirAll testDir
+
+-- ============================================================================
+-- Template Rendering Tests (for layout content injection)
+-- ============================================================================
+
+testSuite "TemplateRendering"
+
+test "render template with triple-brace content variable" := do
+  -- Test that {{{content}}} properly outputs unescaped HTML
+  let layoutSrc := "<html><body>{{{content}}}</body></html>"
+  let contentHtml := "<div class=\"test\">Hello <strong>World</strong></div>"
+
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse layout: {e}")
+  | .ok layoutTmpl =>
+    -- Create context with content as string value
+    let ctx := Stencil.Context.fromValue (.object #[("content", .string contentHtml)])
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      let expected := "<html><body><div class=\"test\">Hello <strong>World</strong></div></body></html>"
+      if result != expected then
+        IO.println s!"Expected: {expected}"
+        IO.println s!"Got:      {result}"
+        throw (IO.userError "Content not rendered correctly")
+
+test "render preserves long content strings" := do
+  -- Test that long strings aren't truncated
+  let layoutSrc := "<html>{{{content}}}</html>"
+  -- Create a ~4KB content string
+  let contentHtml := String.ofList (List.replicate 4000 'x')
+
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse layout: {e}")
+  | .ok layoutTmpl =>
+    let ctx := Stencil.Context.fromValue (.object #[("content", .string contentHtml)])
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      let expected := "<html>" ++ contentHtml ++ "</html>"
+      if result.length != expected.length then
+        IO.println s!"Expected length: {expected.length}"
+        IO.println s!"Got length:      {result.length}"
+        throw (IO.userError "Content was truncated!")
+      if result != expected then
+        throw (IO.userError "Content mismatch")
+
+test "render with realistic layout and content sizes" := do
+  -- Simulate homebase-app scenario: ~3KB layout + ~350 byte content
+  let layoutPrefix := String.ofList (List.replicate 2800 'L')
+  let layoutSrc := layoutPrefix ++ "{{{content}}}" ++ "<script src=\"/js/hot-reload.js\"></script></body></html>"
+  let contentHtml := String.ofList (List.replicate 350 'C')
+
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse layout: {e}")
+  | .ok layoutTmpl =>
+    let ctx := Stencil.Context.fromValue (.object #[("content", .string contentHtml)])
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      let expected := layoutPrefix ++ contentHtml ++ "<script src=\"/js/hot-reload.js\"></script></body></html>"
+      IO.println s!"Expected length: {expected.length}"
+      IO.println s!"Got length:      {result.length}"
+      if result.length != expected.length then
+        -- Show where it differs
+        IO.println s!"Result ends with: ...{takeRight result 50}"
+        IO.println s!"Expected ends with: ...{takeRight expected 50}"
+        throw (IO.userError "Content was truncated!")
+      -- Check the ending specifically
+      if !result.endsWith "</body></html>" then
+        IO.println s!"Result tail: {takeRight result 100}"
+        throw (IO.userError "Missing closing tags!")
+
+test "Stencil.Value.string preserves long strings" := do
+  -- Test that Value.string doesn't truncate
+  let longStr := String.ofList (List.replicate 5000 'x')
+  let val := Stencil.Value.string longStr
+  match val with
+  | .string s =>
+    if s.length != 5000 then
+      throw (IO.userError s!"Value.string truncated: expected 5000, got {s.length}")
+  | _ => throw (IO.userError "Expected string value")
+
+test "Context.mergeData preserves string content" := do
+  -- Test that mergeData doesn't truncate strings
+  let longContent := String.ofList (List.replicate 4000 'x')
+  let baseCtx := Stencil.Context.fromValue (.object #[("title", .string "Test")])
+  let newData := Stencil.Value.object #[("content", .string longContent)]
+  let mergedCtx := baseCtx.mergeData newData
+
+  -- Check the content was preserved
+  match mergedCtx.lookup "content" with
+  | some (.string s) =>
+    if s.length != 4000 then
+      throw (IO.userError s!"mergeData truncated content: expected 4000, got {s.length}")
+  | some other => throw (IO.userError s!"Expected string, got {other.typeName}")
+  | none => throw (IO.userError "Content not found in merged context")
+
+test "render layout without any variables" := do
+  -- Read the actual layout file
+  let layoutPath := "/Users/Shared/Projects/lean-workspace/apps/homebase-app/templates/layouts/app.html.hbs"
+  let layoutSrc ← IO.FS.readFile layoutPath
+
+  IO.println s!"Layout source size: {layoutSrc.length} bytes"
+
+  -- Parse and render with empty context (no variables)
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse layout: {e}")
+  | .ok layoutTmpl =>
+    let ctx := Stencil.Context.empty
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      IO.println s!"Rendered size: {result.length} bytes"
+      IO.println s!"Ends with: ...{takeRight result 60}"
+
+      if !result.endsWith "</html>\n" && !result.endsWith "</html>" then
+        IO.println s!"TRUNCATED! Last 100 chars: {takeRight result 100}"
+        throw (IO.userError "Layout truncated even without variables!")
+
+test "render layout with just content variable" := do
+  let layoutPath := "/Users/Shared/Projects/lean-workspace/apps/homebase-app/templates/layouts/app.html.hbs"
+  let layoutSrc ← IO.FS.readFile layoutPath
+
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse layout: {e}")
+  | .ok layoutTmpl =>
+    let ctx := Stencil.Context.fromValue (.object #[
+      ("content", .string "<p>Test content</p>")
+    ])
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      IO.println s!"With content - Rendered size: {result.length} bytes"
+      IO.println s!"Ends with: ...{takeRight result 60}"
+
+      if !result.endsWith "</html>\n" && !result.endsWith "</html>" then
+        IO.println s!"TRUNCATED! Last 100 chars: {takeRight result 100}"
+        throw (IO.userError "Layout truncated with content variable!")
+
+test "simplified layout to isolate issue" := do
+  -- Minimal layout that mimics app.html.hbs structure
+  let layoutSrc := "<!DOCTYPE html>\n<html>\n<head><title>{{title}}</title></head>\n<body>\n{{{content}}}\n<script src=\"/js/hot-reload.js\"></script>\n</body>\n</html>\n"
+
+  match Stencil.parse layoutSrc with
+  | .error e => throw (IO.userError s!"Failed to parse: {e}")
+  | .ok layoutTmpl =>
+    let ctx := Stencil.Context.fromValue (.object #[
+      ("content", .string "<p>Test</p>"),
+      ("title", .string "Test")
+    ])
+    match Stencil.renderString layoutTmpl ctx with
+    | .error e => throw (IO.userError s!"Failed to render: {e}")
+    | .ok result =>
+      IO.println s!"Simple layout result: {result}"
+      if !result.endsWith "</html>\n" then
+        throw (IO.userError "Even simple layout truncated!")
 
 #generate_tests
 

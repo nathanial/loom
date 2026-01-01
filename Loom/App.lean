@@ -451,6 +451,16 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
     -- Initialize the global SSE publisher
     SSE.setup manager
 
+    -- Start hot reload watcher if stencil is enabled with hot reload
+    match stencilRef with
+    | some ref =>
+      let mgr ← ref.get
+      if mgr.config.hotReload then
+        let _ ← Stencil.Manager.startWatcher ref do
+          SSE.publishEvent "hot-reload" "reload" ""
+        IO.println "Hot reload: Watching for template changes"
+    | none => pure ()
+
     -- Create server with SSE support (using cached db ref)
     let server := app.toServerWithSSE manager cachedDbRef stencilRef host port
 

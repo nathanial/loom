@@ -3,6 +3,7 @@
 -/
 import Stencil
 import Loom.ActionM
+import Loom.SSE
 import Loom.Stencil.Config
 import Loom.Stencil.Manager
 import Loom.Stencil.Convert
@@ -32,12 +33,15 @@ def getStencilManager : Loom.ActionM (Option (IO.Ref Manager)) := do
   let ctx ← get
   pure ctx.stencilManager
 
-/-- Check and perform hot reload if needed -/
+/-- Check and perform hot reload if needed.
+    Publishes SSE event to "hot-reload" topic when templates change. -/
 private def maybeHotReload (managerRef : IO.Ref Manager) : IO Unit := do
   let manager ← managerRef.get
   if ← manager.shouldCheckReload then
-    let updated ← manager.checkAndReload
+    let (updated, changed) ← manager.checkAndReload
     managerRef.set updated
+    if changed then
+      Loom.SSE.publishEvent "hot-reload" "reload" ""
 
 /-- Render a template by name with user data.
     The template receives:
@@ -61,7 +65,7 @@ def render (name : String) (data : Stencil.Value := .null) : Loom.ActionM Herald
     | none => throw (IO.userError (toString (RenderError.templateNotFound name)))
     | some tmpl =>
       -- Build Stencil context with merged data
-      let stencilCtx := buildStencilContext ctx data manager.partials
+      let stencilCtx := buildStencilContext ctx data manager.getPartials
 
       -- Render template
       match Stencil.renderString tmpl stencilCtx with
@@ -100,7 +104,7 @@ def renderWithLayout (layout : String) (name : String) (data : Stencil.Value := 
       | none => throw (IO.userError (toString (RenderError.layoutNotFound layout)))
       | some layoutTmpl =>
         -- Build context
-        let stencilCtx := buildStencilContext ctx data manager.partials
+        let stencilCtx := buildStencilContext ctx data manager.getPartials
 
         -- First render the content template
         match Stencil.renderString tmpl stencilCtx with
@@ -144,7 +148,7 @@ def renderPartial (name : String) (data : Stencil.Value := .null)
     match manager.getPartial name with
     | none => throw (IO.userError (toString (RenderError.templateNotFound s!"partial:{name}")))
     | some tmpl =>
-      let stencilCtx := buildStencilContext ctx data manager.partials
+      let stencilCtx := buildStencilContext ctx data manager.getPartials
       match Stencil.renderString tmpl stencilCtx with
       | .ok htmlStr => Loom.ActionM.html htmlStr
       | .error e => throw (IO.userError (toString (RenderError.renderError (toString e))))
