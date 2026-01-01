@@ -419,6 +419,59 @@ def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager)
   -- Register SSE routes
   app.sseRoutes.foldl (fun s (pattern, topic) => s.sseRoute pattern topic) server
 
+/-- File entry for static file watching -/
+private structure StaticFileEntry where
+  path : System.FilePath
+  mtime : UInt64
+  deriving Inhabited
+
+/-- Get file modification time -/
+private def getFileMtime (path : System.FilePath) : IO UInt64 := do
+  let metadata ← path.metadata
+  pure metadata.modified.sec.toNat.toUInt64
+
+/-- Recursively list all files in a directory -/
+private partial def walkDir (dir : System.FilePath) : IO (List System.FilePath) := do
+  let mut files : List System.FilePath := []
+  if ← dir.isDir then
+    for entry in ← dir.readDir do
+      if ← entry.path.isDir then
+        let subFiles ← walkDir entry.path
+        files := files ++ subFiles
+      else
+        files := entry.path :: files
+  pure files
+
+/-- Start a background watcher for static files (CSS, JS, etc.).
+    Polls for mtime changes and calls onChanged with the relative file path. -/
+def startStaticWatcher (dir : String) (extension : String) (onChanged : String → IO Unit)
+    : IO (Task (Except IO.Error Unit)) := do
+  let dirPath := System.FilePath.mk dir
+  -- Build initial file map
+  let allFiles ← walkDir dirPath
+  let cssFiles := allFiles.filter fun p => p.toString.endsWith extension
+  let mut fileMap : Std.HashMap String StaticFileEntry := {}
+  for path in cssFiles do
+    let mtime ← getFileMtime path
+    let relPath := path.toString.drop (dir.length + 1)  -- Remove dir prefix
+    fileMap := fileMap.insert relPath { path, mtime }
+
+  let fileMapRef ← IO.mkRef fileMap
+
+  IO.asTask do
+    while true do
+      IO.sleep (500 : UInt32)  -- Poll every 500ms
+      let currentMap ← fileMapRef.get
+      let mut newMap := currentMap
+      for (relPath, entry) in currentMap.toList do
+        if ← entry.path.pathExists then
+          let currentMtime ← getFileMtime entry.path
+          if currentMtime != entry.mtime then
+            IO.println s!"Hot reload: {extension} {relPath}"
+            newMap := newMap.insert relPath { entry with mtime := currentMtime }
+            onChanged relPath
+      fileMapRef.set newMap
+
 /-- Run the application -/
 def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Unit := do
   -- Initialize persistent database connection once at startup (not per-request!)
@@ -459,6 +512,16 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
         let _ ← Stencil.Manager.startWatcher ref do
           SSE.publishEvent "hot-reload" "reload" ""
         IO.println "Hot reload: Watching for template changes"
+    | none => pure ()
+
+    -- Start CSS hot reload watcher if static path is configured
+    match app.config.staticPath with
+    | some staticPath =>
+      let cssDir := staticPath ++ "/css"
+      if ← (System.FilePath.mk cssDir).pathExists then
+        let _ ← startStaticWatcher cssDir ".css" fun relPath => do
+          SSE.publishEvent "hot-reload" "css" s!"/css/{relPath}"
+        IO.println s!"Hot reload: Watching {cssDir} for CSS changes"
     | none => pure ()
 
     -- Create server with SSE support (using cached db ref)
