@@ -106,9 +106,9 @@ def renderWithLayout (layout : String) (name : String) (data : Stencil.Value := 
         match Stencil.renderString tmpl stencilCtx with
         | .error e => throw (IO.userError (toString (RenderError.renderError (toString e))))
         | .ok contentHtml =>
-          -- Create a partial with the rendered content for the layout
-          let contentTmpl := Stencil.parse! contentHtml
-          let layoutCtx := stencilCtx.addPartial "content" contentTmpl
+          -- Pass rendered content as a string value
+          -- Layout should use {{{content}}} (triple braces) for raw/unescaped output
+          let layoutCtx := stencilCtx.mergeData (.object #[("content", .string contentHtml)])
           match Stencil.renderString layoutTmpl layoutCtx with
           | .ok layoutHtml => Loom.ActionM.html layoutHtml
           | .error e => throw (IO.userError (toString (RenderError.renderError (toString e))))
