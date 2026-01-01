@@ -11,6 +11,7 @@ import Loom.Flash
 import Loom.Form
 import Loom.Multipart
 import Loom.Database
+import Loom.Stencil.Manager
 
 namespace Loom
 
@@ -53,6 +54,8 @@ structure Context where
   logger : Option Chronicle.MultiLogger := none
   /-- Parsed multipart data (for file uploads) -/
   multipartData : Option MultipartData := none
+  /-- Stencil template manager (if configured) -/
+  stencilManager : Option (IO.Ref Stencil.Manager) := none
 
 namespace Context
 

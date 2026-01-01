@@ -11,6 +11,8 @@ import Loom.Middleware
 import Loom.Static
 import Loom.Database
 import Loom.SSE
+import Loom.Stencil.Config
+import Loom.Stencil.Manager
 
 namespace Loom
 
@@ -25,6 +27,8 @@ structure App where
   sseRoutes : List (String × String) := []
   /-- Application logger for action-level logging -/
   logger : Option Chronicle.MultiLogger := none
+  /-- Stencil template engine configuration -/
+  stencilConfig : Option Stencil.Config := none
 
 namespace App
 
@@ -137,6 +141,14 @@ def withPersistentDatabase (app : App) (journalPath : System.FilePath) : App :=
 def withLogger (app : App) (logger : Chronicle.MultiLogger) : App :=
   { app with logger := some logger }
 
+/-- Enable Stencil template engine with configuration -/
+def withStencil (app : App) (config : Stencil.Config) : App :=
+  { app with stencilConfig := some config }
+
+/-- Enable Stencil template engine with default configuration -/
+def withStencilDefault (app : App) : App :=
+  app.withStencil Stencil.Config.default
+
 /-- Enable SSE support for the application.
     This allows the app to broadcast real-time events to connected clients. -/
 def withSSE (app : App) : App :=
@@ -166,7 +178,8 @@ private def loadSession (req : Citadel.ServerRequest) (config : AppConfig) : Ses
 /-- Build context from request -/
 private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
     (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
-    (logger : Option Chronicle.MultiLogger := none) : IO Context := do
+    (logger : Option Chronicle.MultiLogger := none)
+    (stencilManagerRef : Option (IO.Ref Stencil.Manager) := none) : IO Context := do
   -- Load session
   let session := loadSession req config
 
@@ -221,6 +234,7 @@ private def buildContext (req : Citadel.ServerRequest) (config : AppConfig)
        , persistentDb := persistentDb
        , logger := logger
        , multipartData := multipartData
+       , stencilManager := stencilManagerRef
        }
 
 /-- Add path parameters to context -/
@@ -314,9 +328,11 @@ private def findRoute (routes : Routes) (method : Herald.Core.Method) (path : St
   if h : sorted.size > 0 then some sorted[0] else none
 
 /-- Create the main handler -/
-def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none) : Citadel.Handler := fun req => do
+def toHandler (app : App)
+    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (stencilManagerRef : Option (IO.Ref Stencil.Manager) := none) : Citadel.Handler := fun req => do
   -- Build initial context (reads current connection from ref if available)
-  let ctx ← buildContext req app.config cachedPersistentDbRef app.logger
+  let ctx ← buildContext req app.config cachedPersistentDbRef app.logger stencilManagerRef
 
   -- Find matching route
   match findRoute app.routes req.method req.path with
@@ -349,9 +365,11 @@ def toHandler (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist
       pure (finalizeResponse ctx' resp)
 
 /-- Create Citadel server from app (without SSE - use for non-SSE apps) -/
-def toServerBase (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+def toServerBase (app : App)
+    (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (stencilManagerRef : Option (IO.Ref Stencil.Manager) := none)
     (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
-  let handler := app.toHandler cachedPersistentDbRef
+  let handler := app.toHandler cachedPersistentDbRef stencilManagerRef
 
   -- Compose middleware
   let composedMiddleware := Middleware.compose app.middlewares
@@ -374,8 +392,9 @@ def toServerBase (app : App) (cachedPersistentDbRef : Option (IO.Ref Ledger.Pers
 /-- Create Citadel server from app with SSE support -/
 def toServerWithSSE (app : App) (manager : Citadel.SSE.ConnectionManager)
     (cachedPersistentDbRef : Option (IO.Ref Ledger.Persist.PersistentConnection) := none)
+    (stencilManagerRef : Option (IO.Ref Stencil.Manager) := none)
     (host : String := "0.0.0.0") (port : UInt16 := 3000) : Citadel.Server :=
-  let handler := app.toHandler cachedPersistentDbRef
+  let handler := app.toHandler cachedPersistentDbRef stencilManagerRef
 
   -- Compose middleware
   let composedMiddleware := Middleware.compose app.middlewares
@@ -415,6 +434,16 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
       | none => pure none
     | none => pure none
 
+  -- Initialize Stencil template manager if configured
+  let stencilRef ← match app.stencilConfig with
+    | some config =>
+      IO.println s!"Templates: Discovering from {config.templateDir}/"
+      let manager ← Stencil.Manager.discover config
+      IO.println s!"Templates: {manager.templateCount} templates, {manager.partialCount} partials, {manager.layoutCount} layouts"
+      let ref ← IO.mkRef manager
+      pure (some ref)
+    | none => pure none
+
   if app.sseEnabled then
     -- Create SSE connection manager
     let manager ← Citadel.SSE.ConnectionManager.create
@@ -423,14 +452,14 @@ def run (app : App) (host : String := "0.0.0.0") (port : UInt16 := 3000) : IO Un
     SSE.setup manager
 
     -- Create server with SSE support (using cached db ref)
-    let server := app.toServerWithSSE manager cachedDbRef host port
+    let server := app.toServerWithSSE manager cachedDbRef stencilRef host port
 
     IO.println s!"Loom starting on http://{host}:{port}"
     if app.sseRoutes.length > 0 then
       IO.println s!"SSE endpoints: {app.sseRoutes.map Prod.fst}"
     server.run
   else
-    let server := app.toServerBase cachedDbRef host port
+    let server := app.toServerBase cachedDbRef stencilRef host port
     IO.println s!"Loom starting on http://{host}:{port}"
     server.run
 
@@ -463,6 +492,16 @@ def runWithHttpsRedirect (app : App)
         let ref ← IO.mkRef pc
         pure (some ref)
       | none => pure none
+    | none => pure none
+
+  -- Initialize Stencil template manager if configured
+  let stencilRef ← match app.stencilConfig with
+    | some config =>
+      IO.println s!"Templates: Discovering from {config.templateDir}/"
+      let manager ← Stencil.Manager.discover config
+      IO.println s!"Templates: {manager.templateCount} templates, {manager.partialCount} partials, {manager.layoutCount} layouts"
+      let ref ← IO.mkRef manager
+      pure (some ref)
     | none => pure none
 
   -- Create HTTP redirect server (runs in background)
@@ -503,7 +542,7 @@ def runWithHttpsRedirect (app : App)
   if app.sseEnabled then
     let manager ← Citadel.SSE.ConnectionManager.create
     SSE.setup manager
-    let handler := app.toHandler cachedDbRef
+    let handler := app.toHandler cachedDbRef stencilRef
     let composedMiddleware := Middleware.compose app.middlewares
     let finalHandler := composedMiddleware handler
 
@@ -523,7 +562,7 @@ def runWithHttpsRedirect (app : App)
       IO.println s!"SSE endpoints: {app.sseRoutes.map Prod.fst}"
     server.run
   else
-    let handler := app.toHandler cachedDbRef
+    let handler := app.toHandler cachedDbRef stencilRef
     let composedMiddleware := Middleware.compose app.middlewares
     let finalHandler := composedMiddleware handler
 
