@@ -112,11 +112,9 @@ def discover (config : Config) : IO Manager := do
   let mut manager := empty config
   let allFiles ← walkDir templateDir
 
-  -- Filter to only template files
+  -- Filter to only template files (use endsWith to support compound extensions like .html.hbs)
   let templateFiles := allFiles.filter fun path =>
-    match path.extension with
-    | some ext => s!".{ext}" == config.extension
-    | none => false
+    path.toString.endsWith config.extension
 
   for path in templateFiles do
     let content ← IO.FS.readFile path

@@ -394,6 +394,133 @@ test "Context.transact with db updates context" := do
   | Except.error e =>
     throw (IO.userError s!"Unexpected error: {e}")
 
+-- ============================================================================
+-- Stencil Manager Tests
+-- ============================================================================
+
+testSuite "StencilManager"
+
+/-- Helper to check if a path ends with an extension -/
+private def pathEndsWithExt (path : String) (ext : String) : Bool :=
+  path.endsWith ext
+
+test "extension matching with simple extension" := do
+  pathEndsWithExt "templates/home.stencil" ".stencil" ≡ true
+  pathEndsWithExt "templates/home.html" ".stencil" ≡ false
+
+test "extension matching with compound extension" := do
+  pathEndsWithExt "templates/home.html.hbs" ".html.hbs" ≡ true
+  pathEndsWithExt "templates/home.hbs" ".html.hbs" ≡ false
+  pathEndsWithExt "templates/admin/index.html.hbs" ".html.hbs" ≡ true
+
+test "extension matching - FilePath.extension only returns last part" := do
+  -- This demonstrates why we need endsWith instead of FilePath.extension
+  let path := System.FilePath.mk "templates/home.html.hbs"
+  -- FilePath.extension only returns "hbs", not "html.hbs"
+  path.extension ≡ some "hbs"
+
+test "discover templates with compound extension" := do
+  -- Create a temporary test directory
+  let testDir := "test_templates_compound"
+  IO.FS.createDirAll testDir
+
+  -- Create test template files with compound extension
+  IO.FS.writeFile (testDir ++ "/home.html.hbs") "{{title}}"
+  IO.FS.writeFile (testDir ++ "/about.html.hbs") "About page"
+
+  -- Discover with compound extension config
+  let config : Loom.Stencil.Config := {
+    templateDir := testDir
+    extension := ".html.hbs"
+    hotReload := false
+  }
+  let manager ← Loom.Stencil.Manager.discover config
+
+  -- Verify templates were found
+  manager.templateCount ≡ 2
+  (manager.getTemplate "home").isSome ≡ true
+  (manager.getTemplate "about").isSome ≡ true
+
+  -- Cleanup
+  IO.FS.removeFile (testDir ++ "/home.html.hbs")
+  IO.FS.removeFile (testDir ++ "/about.html.hbs")
+  IO.FS.removeDirAll testDir
+
+test "discover templates in subdirectories with compound extension" := do
+  -- Create a temporary test directory with subdirs
+  let testDir := "test_templates_subdir"
+  IO.FS.createDirAll (testDir ++ "/admin")
+  IO.FS.createDirAll (testDir ++ "/layouts")
+
+  -- Create test template files
+  IO.FS.writeFile (testDir ++ "/home.html.hbs") "Home"
+  IO.FS.writeFile (testDir ++ "/admin/index.html.hbs") "Admin Index"
+  IO.FS.writeFile (testDir ++ "/admin/show.html.hbs") "Admin Show"
+  IO.FS.writeFile (testDir ++ "/layouts/app.html.hbs") "Layout"
+
+  -- Discover
+  let config : Loom.Stencil.Config := {
+    templateDir := testDir
+    extension := ".html.hbs"
+    hotReload := false
+  }
+  let manager ← Loom.Stencil.Manager.discover config
+
+  -- Verify templates were found with correct names
+  (manager.getTemplate "home").isSome ≡ true
+  (manager.getTemplate "admin/index").isSome ≡ true
+  (manager.getTemplate "admin/show").isSome ≡ true
+  -- layouts go into the layouts map
+  (manager.getLayout "app").isSome ≡ true
+
+  -- Cleanup
+  IO.FS.removeFile (testDir ++ "/home.html.hbs")
+  IO.FS.removeFile (testDir ++ "/admin/index.html.hbs")
+  IO.FS.removeFile (testDir ++ "/admin/show.html.hbs")
+  IO.FS.removeFile (testDir ++ "/layouts/app.html.hbs")
+  IO.FS.removeDirAll (testDir ++ "/admin")
+  IO.FS.removeDirAll (testDir ++ "/layouts")
+  IO.FS.removeDirAll testDir
+
+test "discover with 'templates' dir name (like homebase-app)" := do
+  -- This mimics the exact homebase-app setup
+  let testDir := "templates"
+  IO.FS.createDirAll (testDir ++ "/admin")
+  IO.FS.createDirAll (testDir ++ "/layouts")
+
+  -- Create test template files
+  IO.FS.writeFile (testDir ++ "/home.html.hbs") "Home"
+  IO.FS.writeFile (testDir ++ "/admin/index.html.hbs") "Admin Index"
+  IO.FS.writeFile (testDir ++ "/layouts/app.html.hbs") "{{@partialBlock}}"
+
+  -- Discover with exact homebase-app config
+  let config : Loom.Stencil.Config := {
+    templateDir := "templates"
+    extension := ".html.hbs"
+    hotReload := true
+  }
+  let manager ← Loom.Stencil.Manager.discover config
+
+  -- Debug output
+  IO.println s!"Template count: {manager.templateCount}"
+  IO.println s!"Layout count: {manager.layoutCount}"
+
+  -- Verify templates were found with correct names
+  if !(manager.getTemplate "home").isSome then
+    throw (IO.userError "Template 'home' not found")
+  if !(manager.getTemplate "admin/index").isSome then
+    throw (IO.userError "Template 'admin/index' not found")
+  if !(manager.getLayout "app").isSome then
+    throw (IO.userError "Layout 'app' not found")
+
+  -- Cleanup
+  IO.FS.removeFile (testDir ++ "/home.html.hbs")
+  IO.FS.removeFile (testDir ++ "/admin/index.html.hbs")
+  IO.FS.removeFile (testDir ++ "/layouts/app.html.hbs")
+  IO.FS.removeDirAll (testDir ++ "/admin")
+  IO.FS.removeDirAll (testDir ++ "/layouts")
+  IO.FS.removeDirAll testDir
+
 #generate_tests
 
 -- Main entry point
