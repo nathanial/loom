@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package loom where
-  version := v!"0.1.1"
+  version := v!"0.1.2"
 
 require citadel from git "https://github.com/nathanial/citadel" @ "v0.0.1"
 require scribe from git "https://github.com/nathanial/scribe" @ "v0.0.2"
@@ -10,7 +10,7 @@ require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.3"
 require ledger from git "https://github.com/nathanial/ledger" @ "v0.0.2"
 require chronicle from git "https://github.com/nathanial/chronicle" @ "v0.0.1"
 require staple from git "https://github.com/nathanial/staple" @ "v0.0.2"
-require stencil from git "https://github.com/nathanial/stencil" @ "v0.1.4"
+require stencil from git "https://github.com/nathanial/stencil" @ "v0.1.5"
 
 -- OpenSSL linking (required by citadel's TLS support)
 -- Lake doesn't propagate moreLinkArgs from dependencies, so we must add them here
