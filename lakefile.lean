@@ -6,7 +6,7 @@ package loom where
 
 require citadel from git "https://github.com/nathanial/citadel" @ "v0.0.1"
 require scribe from git "https://github.com/nathanial/scribe" @ "v0.0.2"
-require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.7"
+require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.8"
 require ledger from git "https://github.com/nathanial/ledger" @ "v0.0.2"
 require chronicle from git "https://github.com/nathanial/chronicle" @ "v0.0.1"
 require staple from git "https://github.com/nathanial/staple" @ "v0.0.2"
