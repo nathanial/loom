@@ -688,7 +688,7 @@ test "simplified layout to isolate issue" := do
       if !result.endsWith "</html>\n" then
         throw (IO.userError "Even simple layout truncated!")
 
-#generate_tests
+
 
 -- Main entry point
 def main : IO UInt32 := do
